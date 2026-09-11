@@ -14,7 +14,7 @@ def main():
     # Demo data should disappear after the first real Cyclades refresh; manually
     # added entries (source=local) are intentionally preserved.
     db.execute("UPDATE machines SET active=0 WHERE source IN ('cyclades', 'demo')")
-    db.execute("UPDATE tools SET active=0 WHERE source IN ('cyclades', 'demo')")
+    db.execute("UPDATE tools SET active=0 WHERE source IN ('cyclades', 'demo') AND active_override IS NULL")
     for item in payload["machines"]:
         db.execute(
             """INSERT INTO machines(code,name,location,active,source) VALUES(?,?,?,1,'cyclades')
@@ -24,9 +24,10 @@ def main():
         )
     for item in payload["tools"]:
         db.execute(
-            """INSERT INTO tools(code,name,material,active,source) VALUES(?,?,?,1,'cyclades')
+            """INSERT INTO tools(code,name,material,active,source,active_override) VALUES(?,?,?,1,'cyclades',NULL)
                ON CONFLICT(code) DO UPDATE SET name=excluded.name, material=excluded.material,
-               active=1, source='cyclades' WHERE tools.source IN ('cyclades','demo')""",
+               active=CASE WHEN tools.active_override IS NULL THEN 1 ELSE tools.active END,
+               source='cyclades' WHERE tools.source IN ('cyclades','demo')""",
             (item["code"], item["name"], item.get("material", "")),
         )
     db.commit()

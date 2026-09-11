@@ -58,7 +58,8 @@ def create_app(test_config=None):
             );
             CREATE TABLE IF NOT EXISTS tools (
               id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
-              material TEXT, active INTEGER NOT NULL DEFAULT 1, source TEXT NOT NULL DEFAULT 'local'
+              material TEXT, active INTEGER NOT NULL DEFAULT 1, source TEXT NOT NULL DEFAULT 'local',
+              active_override INTEGER CHECK(active_override IN (0,1))
             );
             CREATE TABLE IF NOT EXISTS process_changes (
               id INTEGER PRIMARY KEY, changed_at TEXT NOT NULL, user_id INTEGER NOT NULL,
@@ -74,6 +75,9 @@ def create_app(test_config=None):
             CREATE INDEX IF NOT EXISTS idx_changes_tool ON process_changes(tool_id);
             """
         )
+        tool_columns = {row["name"] for row in db.execute("PRAGMA table_info(tools)").fetchall()}
+        if "active_override" not in tool_columns:
+            db.execute("ALTER TABLE tools ADD COLUMN active_override INTEGER CHECK(active_override IN (0,1))")
         now = datetime.now().isoformat(timespec="seconds")
         if not db.execute("SELECT 1 FROM users LIMIT 1").fetchone():
             db.executemany(
@@ -245,6 +249,69 @@ def create_app(test_config=None):
         db = get_db()
         stats = {"changes": db.execute("SELECT COUNT(*) FROM process_changes").fetchone()[0], "pending": db.execute("SELECT COUNT(*) FROM process_changes WHERE result_status='pending'").fetchone()[0], "tools": db.execute("SELECT COUNT(*) FROM tools WHERE active=1").fetchone()[0]}
         return render_template("admin.html", stats=stats, users=db.execute("SELECT * FROM users ORDER BY display_name").fetchall(), machines=db.execute("SELECT * FROM machines ORDER BY code LIMIT 100").fetchall(), tools=db.execute("SELECT * FROM tools ORDER BY code LIMIT 100").fetchall())
+
+    @app.post("/admin/users")
+    @admin_required
+    def add_user():
+        username = request.form.get("username", "").strip().lower()
+        display_name = request.form.get("display_name", "").strip()
+        password = request.form.get("password", "")
+        role = request.form.get("role", "technolog")
+        if not username or not display_name or len(password) < 4 or role not in ("admin", "technolog"):
+            flash("Vyplň přihlašovací jméno, celé jméno, roli a heslo o délce alespoň 4 znaky.", "error")
+            return redirect(url_for("admin"))
+        try:
+            get_db().execute("INSERT INTO users(username,display_name,password_hash,role,created_at) VALUES(?,?,?,?,?)", (username, display_name, generate_password_hash(password), role, datetime.now().isoformat(timespec="seconds")))
+            get_db().commit()
+            flash("Uživatel byl vytvořen.", "success")
+        except sqlite3.IntegrityError:
+            flash("Toto přihlašovací jméno už existuje.", "error")
+        return redirect(url_for("admin"))
+
+    @app.post("/admin/users/<int:user_id>")
+    @admin_required
+    def update_user(user_id):
+        db = get_db()
+        target = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        if not target:
+            abort(404)
+        display_name = request.form.get("display_name", "").strip()
+        role = request.form.get("role", "technolog")
+        active = 1 if request.form.get("active") == "on" else 0
+        password = request.form.get("password", "")
+        if not display_name or role not in ("admin", "technolog"):
+            flash("Jméno a platná role jsou povinné.", "error")
+        elif target["id"] == current_user()["id"] and not active:
+            flash("Nemůžeš deaktivovat vlastní účet.", "error")
+        elif password and len(password) < 4:
+            flash("Resetované heslo musí mít alespoň 4 znaky.", "error")
+        else:
+            if password:
+                db.execute("UPDATE users SET display_name=?,role=?,active=?,password_hash=? WHERE id=?", (display_name, role, active, generate_password_hash(password), user_id))
+            else:
+                db.execute("UPDATE users SET display_name=?,role=?,active=? WHERE id=?", (display_name, role, active, user_id))
+            db.commit()
+            flash("Uživatel byl upraven." + (" Heslo bylo resetováno." if password else ""), "success")
+        return redirect(url_for("admin"))
+
+    @app.post("/admin/tools/<int:tool_id>/active")
+    @admin_required
+    def set_tool_active(tool_id):
+        tool = get_db().execute("SELECT * FROM tools WHERE id=?", (tool_id,)).fetchone()
+        if not tool:
+            abort(404)
+        action = request.form.get("action")
+        if action == "deactivate":
+            get_db().execute("UPDATE tools SET active=0,active_override=0 WHERE id=?", (tool_id,))
+            message = f"Nástroj {tool['code']} byl deaktivován a synchronizace jej nebude znovu aktivovat."
+        elif action == "activate":
+            get_db().execute("UPDATE tools SET active=1,active_override=NULL WHERE id=?", (tool_id,))
+            message = f"Nástroj {tool['code']} je znovu aktivní."
+        else:
+            abort(400)
+        get_db().commit()
+        flash(message, "success")
+        return redirect(url_for("admin"))
 
     @app.post("/admin/catalog/<kind>")
     @admin_required

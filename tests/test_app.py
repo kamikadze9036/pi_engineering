@@ -39,6 +39,17 @@ class ProcessLogTest(unittest.TestCase):
         response = self.client.post("/account/password", data={"current_password": "admin123", "new_password": "noveheslo1", "confirmation": "noveheslo1"}, follow_redirects=True)
         self.assertIn("Heslo bylo změněno".encode(), response.data)
 
+    def test_admin_can_reset_user_and_deactivate_tool(self):
+        self.login()
+        response = self.client.post("/admin/users/2", data={"display_name": "Jan Svoboda", "role": "technolog", "active": "on", "password": "reset123"}, follow_redirects=True)
+        self.assertIn("Heslo bylo resetováno".encode(), response.data)
+        self.client.post("/logout")
+        self.assertIn("Nová procesní změna".encode(), self.login("technik", "reset123").data)
+        self.client.post("/logout")
+        self.login()
+        self.client.post("/admin/tools/1/active", data={"action": "deactivate"})
+        self.assertEqual(self.client.get("/api/catalog/tools?q=MO2945").get_json(), [])
+
 
 if __name__ == "__main__":
     unittest.main()
