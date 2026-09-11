@@ -34,6 +34,13 @@ class ProcessLogTest(unittest.TestCase):
         history = self.client.get("/history?q=propadu")
         self.assertIn("Dotlak upraven".encode(), history.data)
 
+    def test_verified_test_reverted_status_is_saved_and_labeled(self):
+        self.login("technik", "technik123")
+        response = self.client.post("/changes", data={"changed_at":"2026-09-11T09:00","machine_id":1,"tool_id":1,"description":"Ověřovací test vstřiku, nastavení bylo vráceno.","result_status":"test_verified_reverted"}, follow_redirects=True)
+        self.assertIn("Procesní změna byla uložena".encode(), response.data)
+        history = self.client.get("/history")
+        self.assertIn("Test ověřen OK — vráceno zpět".encode(), history.data)
+
     def test_user_can_change_password(self):
         self.login()
         response = self.client.post("/account/password", data={"current_password": "admin123", "new_password": "noveheslo1", "confirmation": "noveheslo1"}, follow_redirects=True)

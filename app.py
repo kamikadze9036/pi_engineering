@@ -8,6 +8,13 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROCESS_CHANGE_STATUSES = ("confirmed", "pending", "reverted", "test_verified_reverted")
+STATUS_LABELS = {
+    "confirmed": "Potvrzeno",
+    "pending": "Čeká na ověření",
+    "reverted": "Vráceno zpět",
+    "test_verified_reverted": "Test ověřen OK — vráceno zpět",
+}
 
 
 def create_app(test_config=None):
@@ -65,7 +72,7 @@ def create_app(test_config=None):
               id INTEGER PRIMARY KEY, changed_at TEXT NOT NULL, user_id INTEGER NOT NULL,
               machine_id INTEGER NOT NULL, tool_id INTEGER NOT NULL, product_material TEXT,
               parameter_name TEXT, old_value TEXT, new_value TEXT, description TEXT NOT NULL,
-              result_status TEXT NOT NULL CHECK(result_status IN ('confirmed','pending','reverted')),
+              result_status TEXT NOT NULL CHECK(result_status IN ('confirmed','pending','reverted','test_verified_reverted')),
               created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
               FOREIGN KEY(user_id) REFERENCES users(id), FOREIGN KEY(machine_id) REFERENCES machines(id),
               FOREIGN KEY(tool_id) REFERENCES tools(id)
@@ -78,6 +85,36 @@ def create_app(test_config=None):
         tool_columns = {row["name"] for row in db.execute("PRAGMA table_info(tools)").fetchall()}
         if "active_override" not in tool_columns:
             db.execute("ALTER TABLE tools ADD COLUMN active_override INTEGER CHECK(active_override IN (0,1))")
+        process_changes_sql = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='process_changes'"
+        ).fetchone()["sql"]
+        if "test_verified_reverted" not in process_changes_sql:
+            # SQLite neumí upravit CHECK omezení tabulky. Při aktualizaci starší
+            # databáze proto tabulku bezpečně vytvoříme znovu a zachováme data.
+            db.executescript(
+                """
+                DROP INDEX IF EXISTS idx_changes_changed_at;
+                DROP INDEX IF EXISTS idx_changes_machine;
+                DROP INDEX IF EXISTS idx_changes_tool;
+                ALTER TABLE process_changes RENAME TO process_changes_legacy;
+                CREATE TABLE process_changes (
+                  id INTEGER PRIMARY KEY, changed_at TEXT NOT NULL, user_id INTEGER NOT NULL,
+                  machine_id INTEGER NOT NULL, tool_id INTEGER NOT NULL, product_material TEXT,
+                  parameter_name TEXT, old_value TEXT, new_value TEXT, description TEXT NOT NULL,
+                  result_status TEXT NOT NULL CHECK(result_status IN ('confirmed','pending','reverted','test_verified_reverted')),
+                  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                  FOREIGN KEY(user_id) REFERENCES users(id), FOREIGN KEY(machine_id) REFERENCES machines(id),
+                  FOREIGN KEY(tool_id) REFERENCES tools(id)
+                );
+                INSERT INTO process_changes(id,changed_at,user_id,machine_id,tool_id,product_material,parameter_name,old_value,new_value,description,result_status,created_at,updated_at)
+                  SELECT id,changed_at,user_id,machine_id,tool_id,product_material,parameter_name,old_value,new_value,description,result_status,created_at,updated_at
+                  FROM process_changes_legacy;
+                DROP TABLE process_changes_legacy;
+                CREATE INDEX idx_changes_changed_at ON process_changes(changed_at DESC);
+                CREATE INDEX idx_changes_machine ON process_changes(machine_id);
+                CREATE INDEX idx_changes_tool ON process_changes(tool_id);
+                """
+            )
         now = datetime.now().isoformat(timespec="seconds")
         if not db.execute("SELECT 1 FROM users LIMIT 1").fetchone():
             db.executemany(
@@ -108,7 +145,7 @@ def create_app(test_config=None):
 
     @app.context_processor
     def template_context():
-        return {"current_user": current_user(), "status_labels": {"confirmed": "Potvrzeno", "pending": "Čeká na ověření", "reverted": "Vráceno zpět"}}
+        return {"current_user": current_user(), "status_labels": STATUS_LABELS}
 
     def login_required(view):
         @wraps(view)
@@ -191,7 +228,7 @@ def create_app(test_config=None):
         if any(not form.get(field, "").strip() for field in required):
             flash("Vyplň stroj, nástroj, popis, stav a čas změny.", "error")
             return redirect(url_for("dashboard"))
-        if form["result_status"] not in ("confirmed", "pending", "reverted"):
+        if form["result_status"] not in PROCESS_CHANGE_STATUSES:
             abort(400)
         db = get_db()
         machine = db.execute("SELECT id FROM machines WHERE id=? AND active=1", (form["machine_id"],)).fetchone()
