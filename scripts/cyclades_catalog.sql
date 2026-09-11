@@ -2,7 +2,7 @@
 -- Machines
 SELECT MAC_REFMAC AS code, MAC_LIBMAC AS name
 FROM SUIVPRO.dbo.MACHINE
-WHERE MAC_REFMAC IS NOT NULL
+WHERE MAC_REFMAC LIKE 'P%'
 ORDER BY MAC_REFMAC;
 
 -- Injection tools/forms. LISTE_OUTILS is the live view documented in pi_cyclades.

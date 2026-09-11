@@ -26,7 +26,27 @@ docker compose exec processlog sh -c 'cp /data/processlog.db /data/processlog-ba
 
 ## Cyclades číselníky
 
-V `scripts/cyclades_catalog.sql` jsou připravené read-only dotazy pro zdroj SUIVPRO: stroje z `MACHINE` a vstřikovací formy z živého pohledu `LISTE_OUTILS` (prefix `MO`). Aplikace začíná na malé demo sadě, aby fungovala bez přístupu do Cyclades. Další krok je spouštět import těchto dvou výsledků z dostupné `spc-vm` do lokální SQLite databáze, například jednou denně.
+V `scripts/cyclades_catalog.sql` jsou připravené read-only dotazy pro zdroj SUIVPRO: vstřikovací lisy z `MACHINE` (reference `P…`) a vstřikovací formy z živého pohledu `LISTE_OUTILS` (prefix `MO`). Synchronizace používá existující bezpečné přihlášení `spc-vm` a soubor `~/cyclades-db.env` na této VM — heslo se nekopíruje do aplikace ani repozitáře.
+
+Po spuštění aplikace načti reálný číselník z hostitele Dockeru:
+
+```bash
+python3 scripts/sync_cyclades.py
+```
+
+Kontrola zdroje bez zápisu do SQLite:
+
+```bash
+python3 scripts/sync_cyclades.py --dry-run
+```
+
+Pro denní synchronizaci přidej na Ubuntu například cron v 02:30:
+
+```cron
+30 2 * * * cd /opt/processlog && /usr/bin/python3 scripts/sync_cyclades.py >> /var/log/processlog-sync.log 2>&1
+```
+
+Synchronizace deaktivuje pouze staré položky dříve načtené z Cyclades (a demo data); položky doplněné adminem zůstávají zachované.
 
 ## Produkční nasazení Ubuntu
 
