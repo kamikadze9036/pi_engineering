@@ -34,6 +34,11 @@ class ProcessLogTest(unittest.TestCase):
         history = self.client.get("/history?q=propadu")
         self.assertIn("Dotlak upraven".encode(), history.data)
 
+    def test_user_can_change_password(self):
+        self.login()
+        response = self.client.post("/account/password", data={"current_password": "admin123", "new_password": "noveheslo1", "confirmation": "noveheslo1"}, follow_redirects=True)
+        self.assertIn("Heslo bylo změněno".encode(), response.data)
+
 
 if __name__ == "__main__":
     unittest.main()

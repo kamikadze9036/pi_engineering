@@ -146,6 +146,27 @@ def create_app(test_config=None):
         session.clear()
         return redirect(url_for("login"))
 
+    @app.route("/account/password", methods=["GET", "POST"])
+    @login_required
+    def change_password():
+        user = current_user()
+        if request.method == "POST":
+            current_password = request.form.get("current_password", "")
+            new_password = request.form.get("new_password", "")
+            confirmation = request.form.get("confirmation", "")
+            if not check_password_hash(user["password_hash"], current_password):
+                flash("Současné heslo nesouhlasí.", "error")
+            elif len(new_password) < 8:
+                flash("Nové heslo musí mít alespoň 8 znaků.", "error")
+            elif new_password != confirmation:
+                flash("Nové heslo a potvrzení se neshodují.", "error")
+            else:
+                get_db().execute("UPDATE users SET password_hash=? WHERE id=?", (generate_password_hash(new_password), user["id"]))
+                get_db().commit()
+                flash("Heslo bylo změněno.", "success")
+                return redirect(url_for("dashboard"))
+        return render_template("change_password.html")
+
     @app.get("/")
     @login_required
     def dashboard():

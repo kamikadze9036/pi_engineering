@@ -1,0 +1,1 @@
+.account-link{color:var(--muted);font-size:13px;text-decoration:none;margin-left:10px}.account-link:hover{color:var(--ink)}.password-card{max-width:430px}.password-card h1{font-size:22px;margin:0}.password-card form{display:grid;gap:15px;margin-top:20px}.password-card label{font-size:13px;font-weight:650;display:grid;gap:6px}@media(max-width:700px){.account-link{display:none}}
