@@ -217,10 +217,6 @@ def create_app(test_config=None):
         sql = """SELECT c.*,u.display_name,m.code machine_code,m.name machine_name,t.code tool_code,t.name tool_name
                  FROM process_changes c JOIN users u ON u.id=c.user_id JOIN machines m ON m.id=c.machine_id JOIN tools t ON t.id=c.tool_id WHERE 1=1"""
         params = []
-        if q:
-            like = f"%{q}%"
-            sql += " AND (m.code LIKE ? OR m.name LIKE ? OR t.code LIKE ? OR t.name LIKE ? OR u.display_name LIKE ? OR c.description LIKE ? OR c.parameter_name LIKE ? OR c.product_material LIKE ?)"
-            params.extend([like] * 8)
         sql += " ORDER BY c.changed_at DESC LIMIT 300"
         changes = get_db().execute(sql, params).fetchall()
         return render_template("history.html", changes=changes, q=q)
