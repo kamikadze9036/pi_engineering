@@ -50,6 +50,18 @@ class ProcessLogTest(unittest.TestCase):
         self.client.post("/admin/tools/1/active", data={"action": "deactivate"})
         self.assertEqual(self.client.get("/api/catalog/tools?q=MO2945").get_json(), [])
 
+    def test_history_is_shared_but_only_admin_can_delete(self):
+        self.login()
+        self.client.post("/changes", data={"changed_at":"2026-09-11T09:00","machine_id":1,"tool_id":1,"description":"Adminův společný záznam.","result_status":"confirmed"})
+        self.client.post("/logout")
+        self.login("technik", "technik123")
+        self.assertIn("Adminův společný záznam".encode(), self.client.get("/history").data)
+        self.assertEqual(self.client.post("/history/1/delete").status_code, 403)
+        self.client.post("/logout")
+        self.login()
+        response = self.client.post("/history/1/delete", follow_redirects=True)
+        self.assertIn("Záznam v historii byl smazán".encode(), response.data)
+
 
 if __name__ == "__main__":
     unittest.main()

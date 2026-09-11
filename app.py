@@ -217,8 +217,6 @@ def create_app(test_config=None):
         sql = """SELECT c.*,u.display_name,m.code machine_code,m.name machine_name,t.code tool_code,t.name tool_name
                  FROM process_changes c JOIN users u ON u.id=c.user_id JOIN machines m ON m.id=c.machine_id JOIN tools t ON t.id=c.tool_id WHERE 1=1"""
         params = []
-        if user["role"] != "admin":
-            sql += " AND c.user_id=?"; params.append(user["id"])
         if q:
             like = f"%{q}%"
             sql += " AND (m.code LIKE ? OR m.name LIKE ? OR t.code LIKE ? OR t.name LIKE ? OR u.display_name LIKE ? OR c.description LIKE ? OR c.parameter_name LIKE ? OR c.product_material LIKE ?)"
@@ -226,6 +224,17 @@ def create_app(test_config=None):
         sql += " ORDER BY c.changed_at DESC LIMIT 300"
         changes = get_db().execute(sql, params).fetchall()
         return render_template("history.html", changes=changes, q=q)
+
+    @app.post("/history/<int:change_id>/delete")
+    @admin_required
+    def delete_change(change_id):
+        change = get_db().execute("SELECT id FROM process_changes WHERE id=?", (change_id,)).fetchone()
+        if not change:
+            abort(404)
+        get_db().execute("DELETE FROM process_changes WHERE id=?", (change_id,))
+        get_db().commit()
+        flash("Záznam v historii byl smazán.", "success")
+        return redirect(url_for("history", q=request.form.get("q", "")))
 
     @app.get("/api/catalog/machines")
     @login_required
