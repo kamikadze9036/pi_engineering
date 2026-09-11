@@ -115,6 +115,25 @@ def create_app(test_config=None):
                 CREATE INDEX idx_changes_tool ON process_changes(tool_id);
                 """
             )
+        db.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS change_parameters (
+              id INTEGER PRIMARY KEY, change_id INTEGER NOT NULL, position INTEGER NOT NULL,
+              parameter_name TEXT NOT NULL, old_value TEXT, new_value TEXT,
+              FOREIGN KEY(change_id) REFERENCES process_changes(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_change_parameters_change ON change_parameters(change_id, position);
+            """
+        )
+        # Dosavadní jeden parametr na změně přeneseme do nové podřízené tabulky.
+        # Původní sloupce ponecháváme kvůli bezpečné zpětné kompatibilitě migrace.
+        db.execute(
+            """INSERT INTO change_parameters(change_id, position, parameter_name, old_value, new_value)
+               SELECT c.id, 1, c.parameter_name, c.old_value, c.new_value
+               FROM process_changes c
+               WHERE TRIM(COALESCE(c.parameter_name, '')) <> ''
+                 AND NOT EXISTS (SELECT 1 FROM change_parameters p WHERE p.change_id = c.id)"""
+        )
         now = datetime.now().isoformat(timespec="seconds")
         if not db.execute("SELECT 1 FROM users LIMIT 1").fetchone():
             db.executemany(
@@ -146,6 +165,30 @@ def create_app(test_config=None):
     @app.context_processor
     def template_context():
         return {"current_user": current_user(), "status_labels": STATUS_LABELS}
+
+    def attach_parameters(db, changes):
+        """Připojí parametry k událostem změny pro výpis i fulltextové hledání."""
+        if not changes:
+            return changes
+        by_change_id = {change["id"]: change for change in changes}
+        for change in changes:
+            change["parameters"] = []
+        placeholders = ",".join("?" for _ in by_change_id)
+        rows = db.execute(
+            f"""SELECT change_id, parameter_name, old_value, new_value
+                FROM change_parameters WHERE change_id IN ({placeholders})
+                ORDER BY change_id, position, id""",
+            tuple(by_change_id),
+        ).fetchall()
+        for row in rows:
+            parameter = dict(row)
+            by_change_id[parameter.pop("change_id")]["parameters"].append(parameter)
+        for change in changes:
+            change["parameter_search"] = " ".join(
+                " ".join(filter(None, (parameter["parameter_name"], parameter["old_value"], parameter["new_value"])))
+                for parameter in change["parameters"]
+            )
+        return changes
 
     def login_required(view):
         @wraps(view)
@@ -212,11 +255,13 @@ def create_app(test_config=None):
     @login_required
     def dashboard():
         user = current_user()
-        recent = get_db().execute(
+        db = get_db()
+        recent = [dict(row) for row in db.execute(
             """SELECT c.*, u.display_name, m.code machine_code, m.name machine_name, t.code tool_code, t.name tool_name
                FROM process_changes c JOIN users u ON u.id=c.user_id JOIN machines m ON m.id=c.machine_id JOIN tools t ON t.id=c.tool_id
                WHERE c.user_id = ? ORDER BY c.changed_at DESC LIMIT 5""", (user["id"],)
-        ).fetchall()
+        ).fetchall()]
+        attach_parameters(db, recent)
         return render_template("dashboard.html", recent=recent, now=datetime.now().strftime("%Y-%m-%dT%H:%M"))
 
     @app.post("/changes")
@@ -230,6 +275,20 @@ def create_app(test_config=None):
             return redirect(url_for("dashboard"))
         if form["result_status"] not in PROCESS_CHANGE_STATUSES:
             abort(400)
+        parameter_names = form.getlist("parameter_name")
+        old_values = form.getlist("old_value")
+        new_values = form.getlist("new_value")
+        parameters = []
+        for position in range(max(len(parameter_names), len(old_values), len(new_values))):
+            name = parameter_names[position].strip() if position < len(parameter_names) else ""
+            old_value = old_values[position].strip() if position < len(old_values) else ""
+            new_value = new_values[position].strip() if position < len(new_values) else ""
+            if not any((name, old_value, new_value)):
+                continue
+            if not name:
+                flash("U každého vyplněného řádku uveď název parametru.", "error")
+                return redirect(url_for("dashboard"))
+            parameters.append((position + 1, name, old_value, new_value))
         db = get_db()
         machine = db.execute("SELECT id FROM machines WHERE id=? AND active=1", (form["machine_id"],)).fetchone()
         tool = db.execute("SELECT id FROM tools WHERE id=? AND active=1", (form["tool_id"],)).fetchone()
@@ -237,10 +296,15 @@ def create_app(test_config=None):
             flash("Zvolený stroj nebo nástroj již není aktivní.", "error")
             return redirect(url_for("dashboard"))
         now = datetime.now().isoformat(timespec="seconds")
-        db.execute(
-            """INSERT INTO process_changes(changed_at,user_id,machine_id,tool_id,product_material,parameter_name,old_value,new_value,description,result_status,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (form["changed_at"], user["id"], form["machine_id"], form["tool_id"], form.get("product_material", "").strip(), form.get("parameter_name", "").strip(), form.get("old_value", "").strip(), form.get("new_value", "").strip(), form["description"].strip(), form["result_status"], now, now),
+        cursor = db.execute(
+            """INSERT INTO process_changes(changed_at,user_id,machine_id,tool_id,product_material,description,result_status,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (form["changed_at"], user["id"], form["machine_id"], form["tool_id"], form.get("product_material", "").strip(), form["description"].strip(), form["result_status"], now, now),
+        )
+        db.executemany(
+            """INSERT INTO change_parameters(change_id, position, parameter_name, old_value, new_value)
+               VALUES(?,?,?,?,?)""",
+            [(cursor.lastrowid, position, name, old_value, new_value) for position, name, old_value, new_value in parameters],
         )
         db.commit()
         flash("Procesní změna byla uložena.", "success")
@@ -255,7 +319,9 @@ def create_app(test_config=None):
                  FROM process_changes c JOIN users u ON u.id=c.user_id JOIN machines m ON m.id=c.machine_id JOIN tools t ON t.id=c.tool_id WHERE 1=1"""
         params = []
         sql += " ORDER BY c.changed_at DESC LIMIT 300"
-        changes = get_db().execute(sql, params).fetchall()
+        db = get_db()
+        changes = [dict(row) for row in db.execute(sql, params).fetchall()]
+        attach_parameters(db, changes)
         return render_template("history.html", changes=changes, q=q)
 
     @app.post("/history/<int:change_id>/delete")

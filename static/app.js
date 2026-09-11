@@ -11,4 +11,26 @@
   }
   autocomplete('machine-search', 'machine-id', 'machine-options', '/api/catalog/machines', item => `<b>${item.code}</b> · ${item.name}<small>${item.location || ''}</small>`);
   autocomplete('tool-search', 'tool-id', 'tool-options', '/api/catalog/tools', item => `<b>${item.code}</b> · ${item.name}<small>${item.material || ''}</small>`);
+
+  const parameterRows = document.getElementById('parameter-rows');
+  const addParameter = document.getElementById('add-parameter');
+  if (parameterRows && addParameter) {
+    const updateRemoveButtons = () => {
+      const rows = parameterRows.querySelectorAll('.parameter-row');
+      rows.forEach(row => { row.querySelector('.remove-parameter').hidden = rows.length === 1; });
+    };
+    addParameter.addEventListener('click', () => {
+      const row = parameterRows.querySelector('.parameter-row').cloneNode(true);
+      row.querySelectorAll('input').forEach(input => { input.value = ''; });
+      parameterRows.appendChild(row);
+      updateRemoveButtons();
+      row.querySelector('input').focus();
+    });
+    parameterRows.addEventListener('click', event => {
+      const button = event.target.closest('.remove-parameter');
+      if (!button) return;
+      button.closest('.parameter-row').remove();
+      updateRemoveButtons();
+    });
+  }
 })();

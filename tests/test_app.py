@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 import unittest
 
@@ -25,14 +26,16 @@ class ProcessLogTest(unittest.TestCase):
         self.assertEqual(machines[0]["code"], "1100-03")
         self.assertEqual(tools[0]["code"], "MO2945")
 
-    def test_save_and_multisearch(self):
+    def test_save_multiple_parameters_and_multisearch(self):
         self.login("technik", "technik123")
         machine = self.client.get("/api/catalog/machines?q=1100").get_json()[0]
         tool = self.client.get("/api/catalog/tools?q=MO2945").get_json()[0]
-        response = self.client.post("/changes", data={"changed_at":"2026-09-11T09:00","machine_id":machine["id"],"tool_id":tool["id"],"description":"Dotlak upraven kvůli propadu.","result_status":"pending","parameter_name":"Dotlak","old_value":"420 bar","new_value":"455 bar"}, follow_redirects=True)
+        response = self.client.post("/changes", data={"changed_at":"2026-09-11T09:00","machine_id":machine["id"],"tool_id":tool["id"],"description":"Dotlak a bod přepnutí upraveny kvůli propadu.","result_status":"pending","parameter_name":["Dotlak", "Bod přepnutí"],"old_value":["420 bar", "12 mm"],"new_value":["455 bar", "10 mm"]}, follow_redirects=True)
         self.assertIn("Procesní změna byla uložena".encode(), response.data)
-        history = self.client.get("/history?q=propadu")
-        self.assertIn("Dotlak upraven".encode(), history.data)
+        history = self.client.get("/history?q=Bod přepnutí")
+        self.assertIn("Dotlak a bod přepnutí upraveny".encode(), history.data)
+        with sqlite3.connect(os.path.join(self.tmp.name, "test.db")) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM change_parameters").fetchone()[0], 2)
 
     def test_verified_test_reverted_status_is_saved_and_labeled(self):
         self.login("technik", "technik123")
