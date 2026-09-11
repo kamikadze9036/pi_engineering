@@ -1,0 +1,17 @@
+{% extends 'base.html' %}{% block title %}Nová změna · ProcessLog{% endblock %}{% block content %}
+<section class="heading"><div><h1>Nová procesní změna</h1><p>Záznam se automaticky přiřadí přihlášenému technologovi: <b>{{ current_user.display_name }}</b>.</p></div><time>{{ now[:10] }}</time></section>
+<section class="card"><h2>Co se změnilo?</h2><p class="muted">Piš do polí stroj nebo nástroj — nabídka se filtruje při každém znaku.</p>
+<form method="post" action="{{ url_for('create_change') }}" class="change-form" novalidate>
+  <label>Datum a čas<input name="changed_at" type="datetime-local" value="{{ now }}" required></label>
+  <label>Stroj <span class="required">*</span><div class="autocomplete"><input id="machine-search" autocomplete="off" placeholder="Např. 1100 nebo Arburg" required><input id="machine-id" name="machine_id" type="hidden"><div id="machine-options" class="options" role="listbox"></div></div></label>
+  <label>Nástroj / forma <span class="required">*</span><div class="autocomplete"><input id="tool-search" autocomplete="off" placeholder="Např. MO2945 nebo panel" required><input id="tool-id" name="tool_id" type="hidden"><div id="tool-options" class="options" role="listbox"></div></div></label>
+  <label>Díl / materiál<input name="product_material" placeholder="Např. Door panel · PP talc"></label>
+  <label>Parametr<input name="parameter_name" placeholder="Např. Dotlak"></label>
+  <label>Původní hodnota<input name="old_value" placeholder="Např. 420 bar"></label>
+  <label>Nová hodnota<input name="new_value" placeholder="Např. 455 bar"></label>
+  <label class="full">Co se změnilo a proč? <span class="required">*</span><textarea name="description" required placeholder="Popiš změnu, důvod a pozorování."></textarea></label>
+  <label>Stav / výsledek <select name="result_status"><option value="pending">Čeká na ověření kvalitou</option><option value="confirmed">Potvrzeno — změna funguje</option><option value="reverted">Vráceno zpět</option></select></label>
+  <div class="actions"><span class="muted">Záznam se po uložení objeví v historii.</span><button class="primary">Uložit změnu</button></div>
+</form></section>
+{% if recent %}<section class="recent"><h2>Moje poslední změny</h2>{% for item in recent %}<article><time>{{ item.changed_at|replace('T',' ') }}</time><b>{{ item.machine_code }} · {{ item.tool_code }}</b><span>{{ item.description }}</span><em class="status {{ item.result_status }}">{{ status_labels[item.result_status] }}</em></article>{% endfor %}</section>{% endif %}
+{% endblock %}

@@ -1,0 +1,15 @@
+services:
+  processlog:
+    build: .
+    container_name: processlog
+    ports:
+      - "8000:8000"
+    environment:
+      SECRET_KEY: ${SECRET_KEY:-change-this-before-production}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+    volumes:
+      - processlog_data:/data
+    restart: unless-stopped
+
+volumes:
+  processlog_data:
