@@ -24,7 +24,10 @@ def sql_export(target, query):
             "-U \"$CYCLADES_DB_USER\" -P \"$CYCLADES_DB_PASSWORD\" -d SUIVPRO -C -W -h -1 -s '|' -Q " + shlex.quote(query)
         )
     )
-    result = subprocess.run(["ssh", target, command], text=True, capture_output=True)
+    # On spc-vm Cyclades is directly reachable. Development machines use the
+    # preconfigured SSH alias to execute this same read-only command remotely.
+    runner = ["/bin/sh", "-lc", command] if target == "local" else ["ssh", target, command]
+    result = subprocess.run(runner, text=True, capture_output=True)
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or "Cyclades export failed")
     rows = []

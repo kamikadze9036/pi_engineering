@@ -34,6 +34,12 @@ Po spuštění aplikace načti reálný číselník z hostitele Dockeru:
 python3 scripts/sync_cyclades.py
 ```
 
+Na samotné `spc-vm` spusť přímý režim (bez SSH na sebe sama):
+
+```bash
+python3 scripts/sync_cyclades.py --ssh-target local
+```
+
 Kontrola zdroje bez zápisu do SQLite:
 
 ```bash
