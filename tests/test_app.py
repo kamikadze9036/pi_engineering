@@ -44,6 +44,17 @@ class ProcessLogTest(unittest.TestCase):
         history = self.client.get("/history")
         self.assertIn("Test ověřen OK — vráceno zpět".encode(), history.data)
 
+    def test_author_can_complete_change_and_see_audit_history(self):
+        self.login("technik", "technik123")
+        self.client.post("/changes", data={"changed_at":"2026-09-11T09:00","machine_id":1,"tool_id":1,"description":"Čeká na potvrzení kvalitou.","result_status":"pending","parameter_name":"Dotlak","old_value":"420 bar","new_value":"455 bar"})
+        response = self.client.post("/changes/1/edit", data={"product_material":"PP talc","description":"Kvalita změnu odsouhlasila.","result_status":"confirmed","parameter_name":["Dotlak", "Bod přepnutí"],"old_value":["420 bar", "12 mm"],"new_value":["455 bar", "10 mm"]}, follow_redirects=True)
+        self.assertIn("Historie úprav je uložená".encode(), response.data)
+        timeline = self.client.get("/changes/1/timeline")
+        self.assertIn("Stav: Čeká na ověření → Potvrzeno".encode(), timeline.data)
+        self.assertIn("Přidán parametr: Bod přepnutí".encode(), timeline.data)
+        with sqlite3.connect(os.path.join(self.tmp.name, "test.db")) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM change_audit WHERE change_id=1").fetchone()[0], 2)
+
     def test_user_can_change_password(self):
         self.login()
         response = self.client.post("/account/password", data={"current_password": "admin123", "new_password": "noveheslo1", "confirmation": "noveheslo1"}, follow_redirects=True)
@@ -67,6 +78,7 @@ class ProcessLogTest(unittest.TestCase):
         self.login("technik", "technik123")
         self.assertIn("Adminův společný záznam".encode(), self.client.get("/history").data)
         self.assertEqual(self.client.post("/history/1/delete").status_code, 403)
+        self.assertEqual(self.client.get("/changes/1/edit").status_code, 403)
         self.client.post("/logout")
         self.login()
         response = self.client.post("/history/1/delete", follow_redirects=True)

@@ -1,0 +1,5 @@
+{% extends 'base.html' %}{% block title %}Historie úprav · ProcessLog{% endblock %}{% block content %}
+<section class="heading"><div><h1>Historie úprav záznamu</h1><p>{{ change.changed_at|replace('T',' ') }} · {{ change.machine_code }} · {{ change.tool_code }} · {{ change.display_name }}</p></div><a class="back-link" href="{{ url_for('history') }}">← Zpět do historie</a></section>
+<section class="card record-summary"><p>{{ change.description }}</p>{% for parameter in change.parameters %}<small>{{ parameter.parameter_name }}: {{ parameter.old_value or '—' }} → {{ parameter.new_value or '—' }}</small>{% endfor %}</section>
+{% include 'audit_entries.html' %}
+{% endblock %}

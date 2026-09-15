@@ -1,4 +1,5 @@
 import os
+import json
 import sqlite3
 from datetime import datetime, timedelta
 from functools import wraps
@@ -123,6 +124,14 @@ def create_app(test_config=None):
               FOREIGN KEY(change_id) REFERENCES process_changes(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_change_parameters_change ON change_parameters(change_id, position);
+            CREATE TABLE IF NOT EXISTS change_audit (
+              id INTEGER PRIMARY KEY, change_id INTEGER NOT NULL, edited_at TEXT NOT NULL,
+              editor_id INTEGER NOT NULL, action TEXT NOT NULL CHECK(action IN ('created','updated')),
+              details TEXT NOT NULL DEFAULT '{}',
+              FOREIGN KEY(change_id) REFERENCES process_changes(id) ON DELETE CASCADE,
+              FOREIGN KEY(editor_id) REFERENCES users(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_change_audit_change ON change_audit(change_id, edited_at DESC);
             """
         )
         # Dosavadní jeden parametr na změně přeneseme do nové podřízené tabulky.
@@ -133,6 +142,12 @@ def create_app(test_config=None):
                FROM process_changes c
                WHERE TRIM(COALESCE(c.parameter_name, '')) <> ''
                  AND NOT EXISTS (SELECT 1 FROM change_parameters p WHERE p.change_id = c.id)"""
+        )
+        db.execute(
+            """INSERT INTO change_audit(change_id, edited_at, editor_id, action, details)
+               SELECT c.id, c.created_at, c.user_id, 'created', '{"summary":["Původní záznam"]}'
+               FROM process_changes c
+               WHERE NOT EXISTS (SELECT 1 FROM change_audit a WHERE a.change_id = c.id)"""
         )
         now = datetime.now().isoformat(timespec="seconds")
         if not db.execute("SELECT 1 FROM users LIMIT 1").fetchone():
@@ -189,6 +204,78 @@ def create_app(test_config=None):
                 for parameter in change["parameters"]
             )
         return changes
+
+    def get_change(db, change_id):
+        row = db.execute(
+            """SELECT c.*, u.display_name, m.code machine_code, m.name machine_name,
+                      t.code tool_code, t.name tool_name
+               FROM process_changes c JOIN users u ON u.id=c.user_id
+               JOIN machines m ON m.id=c.machine_id JOIN tools t ON t.id=c.tool_id
+               WHERE c.id=?""",
+            (change_id,),
+        ).fetchone()
+        if not row:
+            abort(404)
+        change = dict(row)
+        return attach_parameters(db, [change])[0]
+
+    def change_snapshot(change):
+        return {
+            "product_material": change.get("product_material") or "",
+            "description": change["description"],
+            "result_status": change["result_status"],
+            "parameters": [
+                {"parameter_name": parameter["parameter_name"], "old_value": parameter["old_value"] or "", "new_value": parameter["new_value"] or ""}
+                for parameter in change["parameters"]
+            ],
+        }
+
+    def parameter_label(parameter):
+        return f"{parameter['parameter_name']}: {parameter['old_value'] or '—'} → {parameter['new_value'] or '—'}"
+
+    def summarize_update(before, after):
+        summary = []
+        if before["result_status"] != after["result_status"]:
+            summary.append(f"Stav: {STATUS_LABELS[before['result_status']]} → {STATUS_LABELS[after['result_status']]}")
+        if before["product_material"] != after["product_material"]:
+            summary.append("Díl / materiál upraven")
+        if before["description"] != after["description"]:
+            summary.append("Popis změny upraven")
+        before_parameters, after_parameters = before["parameters"], after["parameters"]
+        for index in range(max(len(before_parameters), len(after_parameters))):
+            old = before_parameters[index] if index < len(before_parameters) else None
+            new = after_parameters[index] if index < len(after_parameters) else None
+            if old == new:
+                continue
+            if old is None:
+                summary.append(f"Přidán parametr: {parameter_label(new)}")
+            elif new is None:
+                summary.append(f"Odebrán parametr: {parameter_label(old)}")
+            else:
+                summary.append(f"Parametr upraven: {parameter_label(old)} → {parameter_label(new)}")
+        return summary
+
+    def add_audit_entry(db, change_id, editor_id, action, before, after):
+        details = {
+            "before": before,
+            "after": after,
+            "summary": ["Záznam vytvořen"] if action == "created" else summarize_update(before, after),
+        }
+        db.execute(
+            "INSERT INTO change_audit(change_id,edited_at,editor_id,action,details) VALUES(?,?,?,?,?)",
+            (change_id, datetime.now().isoformat(timespec="seconds"), editor_id, action, json.dumps(details, ensure_ascii=False)),
+        )
+
+    def get_audit_entries(db, change_id):
+        entries = [dict(row) for row in db.execute(
+            """SELECT a.*, u.display_name FROM change_audit a JOIN users u ON u.id=a.editor_id
+               WHERE a.change_id=? ORDER BY a.edited_at DESC, a.id DESC""",
+            (change_id,),
+        ).fetchall()]
+        for entry in entries:
+            details = json.loads(entry["details"])
+            entry["summary"] = details.get("summary", [])
+        return entries
 
     def login_required(view):
         @wraps(view)
@@ -306,9 +393,86 @@ def create_app(test_config=None):
                VALUES(?,?,?,?,?)""",
             [(cursor.lastrowid, position, name, old_value, new_value) for position, name, old_value, new_value in parameters],
         )
+        new_snapshot = {
+            "product_material": form.get("product_material", "").strip(),
+            "description": form["description"].strip(),
+            "result_status": form["result_status"],
+            "parameters": [
+                {"parameter_name": name, "old_value": old_value, "new_value": new_value}
+                for _position, name, old_value, new_value in parameters
+            ],
+        }
+        add_audit_entry(db, cursor.lastrowid, user["id"], "created", None, new_snapshot)
         db.commit()
         flash("Procesní změna byla uložena.", "success")
         return redirect(url_for("dashboard"))
+
+    @app.route("/changes/<int:change_id>/edit", methods=["GET", "POST"])
+    @login_required
+    def edit_change(change_id):
+        db = get_db()
+        user = current_user()
+        change = get_change(db, change_id)
+        if change["user_id"] != user["id"] and user["role"] != "admin":
+            abort(403)
+        if request.method == "POST":
+            result_status = request.form.get("result_status", "")
+            if result_status not in PROCESS_CHANGE_STATUSES:
+                abort(400)
+            description = request.form.get("description", "").strip()
+            if not description:
+                flash("Popis změny je povinný.", "error")
+                return redirect(url_for("edit_change", change_id=change_id))
+            parameter_names = request.form.getlist("parameter_name")
+            old_values = request.form.getlist("old_value")
+            new_values = request.form.getlist("new_value")
+            parameters = []
+            for position in range(max(len(parameter_names), len(old_values), len(new_values))):
+                name = parameter_names[position].strip() if position < len(parameter_names) else ""
+                old_value = old_values[position].strip() if position < len(old_values) else ""
+                new_value = new_values[position].strip() if position < len(new_values) else ""
+                if not any((name, old_value, new_value)):
+                    continue
+                if not name:
+                    flash("U každého vyplněného řádku uveď název parametru.", "error")
+                    return redirect(url_for("edit_change", change_id=change_id))
+                parameters.append((position + 1, name, old_value, new_value))
+            before = change_snapshot(change)
+            after = {
+                "product_material": request.form.get("product_material", "").strip(),
+                "description": description,
+                "result_status": result_status,
+                "parameters": [
+                    {"parameter_name": name, "old_value": old_value, "new_value": new_value}
+                    for _position, name, old_value, new_value in parameters
+                ],
+            }
+            if before == after:
+                flash("Nejsou zde žádné nové úpravy k uložení.", "error")
+                return redirect(url_for("edit_change", change_id=change_id))
+            db.execute(
+                """UPDATE process_changes SET product_material=?, description=?, result_status=?, updated_at=?
+                   WHERE id=?""",
+                (after["product_material"], after["description"], after["result_status"], datetime.now().isoformat(timespec="seconds"), change_id),
+            )
+            db.execute("DELETE FROM change_parameters WHERE change_id=?", (change_id,))
+            db.executemany(
+                """INSERT INTO change_parameters(change_id, position, parameter_name, old_value, new_value)
+                   VALUES(?,?,?,?,?)""",
+                [(change_id, position, name, old_value, new_value) for position, name, old_value, new_value in parameters],
+            )
+            add_audit_entry(db, change_id, user["id"], "updated", before, after)
+            db.commit()
+            flash("Procesní změna byla doplněna. Historie úprav je uložená.", "success")
+            return redirect(url_for("edit_change", change_id=change_id))
+        return render_template("edit_change.html", change=change, audit_entries=get_audit_entries(db, change_id))
+
+    @app.get("/changes/<int:change_id>/timeline")
+    @login_required
+    def change_timeline(change_id):
+        db = get_db()
+        change = get_change(db, change_id)
+        return render_template("change_timeline.html", change=change, audit_entries=get_audit_entries(db, change_id))
 
     @app.get("/history")
     @login_required
