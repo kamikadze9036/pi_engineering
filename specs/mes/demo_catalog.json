@@ -1,0 +1,12 @@
+{
+  "generated_at": "demo",
+  "source": "DEMO - pouze pro test bez firemní sítě",
+  "machines": [
+    {"ref": "P-DEMO-01", "code": "P-DEMO-01", "name": "Testovací lis 1"},
+    {"ref": "P-DEMO-02", "code": "P-DEMO-02", "name": "Testovací lis 2"}
+  ],
+  "tools": [
+    {"ref": "MO-DEMO-01", "code": "MO-DEMO-01", "name": "Testovací forma 1"},
+    {"ref": "MO-DEMO-02", "code": "MO-DEMO-02", "name": "Testovací forma 2"}
+  ]
+}
