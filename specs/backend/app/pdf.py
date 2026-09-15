@@ -145,6 +145,11 @@ def split_pages(entries, font: str, bold: str, capacity: float = 520):
     return pages
 
 
+def entries_height(entries, font: str, bold: str) -> int:
+    return sum(29 if kind == "heading" else row_layout(value, font, bold)[-1]
+               for kind, value in entries)
+
+
 def draw_text(c, x, y, text, max_width, font, size=8, color=colors.black):
     c.setFont(font, size)
     c.setFillColor(color)
@@ -187,7 +192,8 @@ def draw_header(c, revision: Revision, template: PdfTemplate, font: str, bold: s
     draw_text(c, 340, 676, f"Forma: {revision.mes_tool_code}  {revision.mes_tool_name}", 235, font)
     c.setFont(font, 7)
     c.drawString(30, 58, f"Autor: {author_name}")
-    c.drawString(222, 58, f"Schválil: {approver_name}")
+    c.drawString(222, 64, f"Schválil: {approver_name}")
+    c.drawString(222, 49, "Podpis po vytištění: __________________________")
     c.drawRightString(width - 30, 58, revision.approved_at.strftime("%d.%m.%Y") if revision.approved_at else "")
     c.line(22, 78, width - 22, 78)
 
@@ -237,6 +243,13 @@ def generate_pdf(revision: Revision, template: PdfTemplate,
     extras = sorted(categories - set(LEFT) - set(RIGHT) - {"Základní údaje"})
     left_pages = split_pages(entries_for(revision, LEFT), font, bold, capacity=515)
     right_pages = split_pages(entries_for(revision, RIGHT + extras), font, bold, capacity=515)
+    # Use free space beneath the left-hand sections for a continuation of the
+    # right-hand data. The supplied ENGEL example uses the whole single sheet.
+    if len(left_pages) == 1 and len(right_pages) > 1:
+        continuation = right_pages[1]
+        if entries_height(left_pages[0], font, bold) + entries_height(continuation, font, bold) <= 515:
+            left_pages[0].extend(continuation)
+            right_pages.pop(1)
     count = max(len(left_pages), len(right_pages))
     stream = io.BytesIO()
     c = canvas.Canvas(stream, pagesize=letter)

@@ -27,6 +27,8 @@ def test_end_to_end_revision_workflow(tmp_path, monkeypatch):
                  email="e@example.invalid", password_hash=hash_password("test-password-123"), role="ENGINEER"),
             User(username="schvalovatel", first_name="Pavel", last_name="Schvalovatel",
                  email="p@example.invalid", password_hash=hash_password("test-password-123"), role="APPROVER"),
+            User(username="admin", first_name="Anna", last_name="Administrátorka",
+                 email="a@example.invalid", password_hash=hash_password("test-password-123"), role="ADMIN"),
         ])
         db.flush()
         definition = ParameterDefinition(code="CYCLE_TIME", name="Doba cyklu",
@@ -36,7 +38,7 @@ def test_end_to_end_revision_workflow(tmp_path, monkeypatch):
         db.add(PdfTemplate(version="v1", title="OPERAČNÍ NÁVODKA",
                            settings={"accent_color": "#153AA8", "section_color": "#E2E4E7",
                                      "show_english_subtitle": True},
-                           is_active=True, created_by=1))
+                           is_active=True, created_by=3))
 
     def test_db():
         with factory() as db:
@@ -92,6 +94,16 @@ def test_end_to_end_revision_workflow(tmp_path, monkeypatch):
             assert copied.status_code == 201
             assert copied.json()["parameters"][0]["numeric_target"] == "41.0000"
             assert engineer.get(f"/api/v1/specs/{spec_id}/current").json()["id"] == revision_id
+        with TestClient(app) as administrator:
+            login = administrator.post("/api/v1/auth/login", json={"username": "admin", "password": "test-password-123"})
+            csrf = {"X-CSRF-Token": login.json()["csrf"]}
+            new_template = administrator.post("/api/v1/pdf-templates", headers=csrf,
+                                              json={"title": "PŘEDPIS A NÁVODKA", "accent_color": "#123456",
+                                                    "section_color": "#EEEEEE", "show_english_subtitle": False})
+            assert new_template.status_code == 201
+            assert new_template.json()["version"] == "v2"
+            assert administrator.get("/api/v1/pdf-templates/current").json()["version"] == "v2"
+            assert administrator.get(f"/api/v1/revisions/{revision_id}/pdf").content == pdf.content
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
