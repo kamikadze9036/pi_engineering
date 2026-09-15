@@ -1,0 +1,69 @@
+services:
+  specs-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: specs
+      POSTGRES_USER: specs
+      POSTGRES_PASSWORD: ${SPECS_DB_PASSWORD:?Set SPECS_DB_PASSWORD in .env}
+    volumes:
+      - specs_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U specs -d specs"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+  specs-init:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["sh", "-c", "alembic upgrade head && python -m app.seed"]
+    environment:
+      SPECS_DB_PASSWORD: ${SPECS_DB_PASSWORD}
+      SPECS_ADMIN_PASSWORD: ${SPECS_ADMIN_PASSWORD:?Set SPECS_ADMIN_PASSWORD in .env}
+      SPECS_DEMO_PASSWORD: ${SPECS_DEMO_PASSWORD:-demo123456789}
+      SPECS_DEMO_MODE: ${SPECS_DEMO_MODE:-true}
+    depends_on:
+      specs-db:
+        condition: service_healthy
+    restart: "no"
+
+  specs-api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      SPECS_DB_PASSWORD: ${SPECS_DB_PASSWORD}
+      SPECS_SESSION_SECRET: ${SPECS_SESSION_SECRET:?Set SPECS_SESSION_SECRET in .env}
+      SPECS_DEMO_MODE: ${SPECS_DEMO_MODE:-true}
+      SPECS_MES_CATALOG_PATH: ${SPECS_MES_CATALOG_PATH:-/app/mes/demo_catalog.json}
+      SPECS_PDF_STORAGE: /data/pdf
+      SPECS_COOKIE_SECURE: ${SPECS_COOKIE_SECURE:-false}
+    volumes:
+      - specs_pdf:/data/pdf
+      - ./mes-export:/data/mes:ro
+    depends_on:
+      specs-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+    restart: unless-stopped
+
+  specs-web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "${SPECS_PORT:-8081}:80"
+    depends_on:
+      specs-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  specs_pgdata:
+  specs_pdf:

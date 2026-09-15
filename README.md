@@ -1,5 +1,7 @@
 # ProcessLog — procesní deník vstřikovny
 
+Nová testovací aplikace technologických předpisů a operačních návodek je ve složce [`specs`](specs/README.md). Spouští se samostatným Docker Compose vedle ProcessLogu.
+
 Jednoduchá interní aplikace pro denní zápis procesních změn technologů. Technolog se přihlásí, vybere stroj a nástroj přes našeptávač a doplní změněné parametry. Admin vidí kompletní historii, multisearch a lokální číselníky.
 
 ## Rychlé spuštění přes Docker Desktop

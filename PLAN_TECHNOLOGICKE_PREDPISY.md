@@ -8,7 +8,7 @@ ProcessLog je jedna Flask aplikace s SQLite, serverovými HTML šablonami a dvě
 
 Číselníky se dnes načítají read-only přes `scripts/sync_cyclades.py`: na `spc-vm` běží `sqlcmd` s přihlašovacími údaji z `~/cyclades-db.env`, výsledky se importují do lokálních tabulek SQLite. Zdrojové dotazy čtou `SUIVPRO.dbo.MACHINE` (`MAC_REFMAC`, `MAC_LIBMAC`) a `SUIVPRO.dbo.LISTE_OUTILS` (`OUT_REFOUT`, `OUT_LIBOUT`, `OUT_TYPEOUT`). Aktuální import používá **kódy** jako klíče, nikoli ověřená interní ID MES. Lokální tabulky ProcessLogu navíc umožňují ručně doplněné stroje a nástroje; ty nesmějí být zdrojem pro nový předpis.
 
-V repozitáři nejsou současné Excelové návodky ani vzor PDF. Bez nich nelze uzavřít katalog parametrů, povinná pole, jednotky, přesnou podobu dokumentu ani postup převodu historických předpisů.
+Po sepsání plánu byla do repozitáře dodána jedna vzorová PDF návodka (`U10_3045_ON_260728_900-002_Schwarz.pdf`). Ukazuje členění a část používaných hodnot, ale bez dalších návodů a zdrojových Excelů nelze uzavřít definitivní katalog parametrů, povinná pole, jednotky ani postup převodu historických předpisů.
 
 ## 2. Navržená hranice systému
 

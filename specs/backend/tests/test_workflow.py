@@ -74,17 +74,24 @@ def test_end_to_end_revision_workflow(tmp_path, monkeypatch):
             assert approved.status_code == 200
             assert approved.json()["status"] == "APPROVED"
             assert reviewer.put(f"/api/v1/revisions/{revision_id}/draft", headers=csrf,
-                                json={"row_version": approved.json()["row_version"]}).status_code == 409
+                                json={"row_version": approved.json()["row_version"]}).status_code == 403
             assert reviewer.get(f"/api/v1/revisions/{revision_id}/pdf").status_code == 404
             pdf = reviewer.post(f"/api/v1/revisions/{revision_id}/pdf/issue", headers=csrf)
             assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
             assert reviewer.get(f"/api/v1/specs/{spec_id}/current/pdf").content == pdf.content
-            copied = reviewer.post(f"/api/v1/specs/{spec_id}/revisions", headers=csrf)
-            assert copied.status_code == 201
-            assert copied.json()["parameters"][0]["numeric_target"] == "41.0000"
             assert reviewer.get(f"/api/v1/specs/{spec_id}/current").json()["id"] == revision_id
             assert reviewer.get(f"/api/v1/revisions/{revision_id}/audit").json()[0]["action"] == "pdf_issued"
             assert list((tmp_path / "pdf").rglob("*.pdf"))
+            assert reviewer.post(f"/api/v1/specs/{spec_id}/revisions", headers=csrf).status_code == 403
+        with TestClient(app) as engineer:
+            login = engineer.post("/api/v1/auth/login", json={"username": "inzenyr", "password": "test-password-123"})
+            csrf = {"X-CSRF-Token": login.json()["csrf"]}
+            assert engineer.put(f"/api/v1/revisions/{revision_id}/draft", headers=csrf,
+                                json={"row_version": approved.json()["row_version"]}).status_code == 409
+            copied = engineer.post(f"/api/v1/specs/{spec_id}/revisions", headers=csrf)
+            assert copied.status_code == 201
+            assert copied.json()["parameters"][0]["numeric_target"] == "41.0000"
+            assert engineer.get(f"/api/v1/specs/{spec_id}/current").json()["id"] == revision_id
     finally:
         app.dependency_overrides.clear()
         engine.dispose()

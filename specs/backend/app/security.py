@@ -36,7 +36,7 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
 
 
 def writer(user: User = Depends(current_user)) -> User:
-    if user.role not in ("ENGINEER", "APPROVER", "ADMIN"):
+    if user.role not in ("ENGINEER", "ADMIN"):
         raise HTTPException(status_code=403, detail="Nemáte oprávnění k úpravě.")
     return user
 

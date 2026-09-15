@@ -6,6 +6,7 @@ from sqlalchemy import (
     Integer, Numeric, String, Text, UniqueConstraint, text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import JSONB
 
 from .database import Base
 
@@ -143,8 +144,8 @@ class AuditEntry(Base):
     entity_type: Mapped[str] = mapped_column(String(120))
     entity_id: Mapped[int] = mapped_column(ID)
     action: Mapped[str] = mapped_column(String(120))
-    before_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    after_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    before_data: Mapped[dict | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
+    after_data: Mapped[dict | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
     reason: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     __table_args__ = (Index("ix_audit_entity", "entity_type", "entity_id", "created_at"),)

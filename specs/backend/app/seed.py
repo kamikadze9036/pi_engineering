@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from .database import SessionLocal
 from .models import ParameterDefinition, PdfTemplate, User
-from .security import hash_password
+from .security import hash_password, verify_password
 
 
 DEFINITIONS = [
@@ -64,12 +64,24 @@ def run() -> None:
                          email="admin@example.invalid", password_hash=hash_password(admin_password), role="ADMIN")
             db.add(admin)
             db.flush()
+        elif not verify_password(admin_password, admin.password_hash):
+            admin.password_hash = hash_password(admin_password)
         if demo:
             demo_password = os.getenv("SPECS_DEMO_PASSWORD", "demo123456789")
             for username, first, role in (("inzenyr", "Inženýr", "ENGINEER"), ("schvalovatel", "Schvalovatel", "APPROVER")):
-                if not db.scalar(select(User).where(User.username == username)):
+                account = db.scalar(select(User).where(User.username == username))
+                if not account:
                     db.add(User(username=username, first_name=first, last_name="Demo",
                                 email=f"{username}@example.invalid", password_hash=hash_password(demo_password), role=role))
+                else:
+                    account.is_active = True
+                    if not verify_password(demo_password, account.password_hash):
+                        account.password_hash = hash_password(demo_password)
+        else:
+            for username in ("inzenyr", "schvalovatel"):
+                account = db.scalar(select(User).where(User.username == username))
+                if account and account.email.endswith("@example.invalid"):
+                    account.is_active = False
         existing = set(db.scalars(select(ParameterDefinition.code)).all())
         for order, (code, name, category, unit, position_kind, value_type) in enumerate(DEFINITIONS, start=1):
             if code not in existing:

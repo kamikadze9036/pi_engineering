@@ -1,0 +1,10 @@
+backend/.venv/
+backend/__pycache__/
+backend/*.db
+backend/pdf-output/
+backend/.pytest_cache/
+frontend/node_modules/
+frontend/dist/
+mes-export/
+.env
+**/*.pyc

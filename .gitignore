@@ -10,5 +10,6 @@ specs/backend/*.db
 specs/backend/pdf-output/
 specs/frontend/node_modules/
 specs/frontend/dist/
+specs/mes-export/*.json
 tmp/
 output/

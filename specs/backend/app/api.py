@@ -91,6 +91,18 @@ def get_revision(db: Session, revision_id: int) -> Revision:
     return revision
 
 
+def get_revision_locked(db: Session, revision_id: int) -> Revision:
+    revision = db.scalar(select(Revision).where(Revision.id == revision_id).with_for_update())
+    if not revision:
+        fail(404, "Revize neexistuje.")
+    return revision
+
+
+def check_author(revision: Revision, user: User) -> None:
+    if revision.created_by != user.id and user.role != "ADMIN":
+        fail(403, "Draft může upravit a odeslat jeho autor nebo administrátor.")
+
+
 def check_version(revision: Revision, version: int) -> None:
     if revision.row_version != version:
         fail(409, "Revize se mezitím změnila. Načtěte ji znovu.")
@@ -238,9 +250,10 @@ def get_revision_endpoint(revision_id: int, db: Session = Depends(get_db), _: Us
 
 @router.put("/revisions/{revision_id}/draft")
 def save_draft(revision_id: int, data: DraftInput, db: Session = Depends(get_db), user: User = Depends(writer)):
-    revision = get_revision(db, revision_id)
+    revision = get_revision_locked(db, revision_id)
     if revision.status != "DRAFT":
         fail(409, "Upravit lze pouze rozpracovanou revizi.")
+    check_author(revision, user)
     check_version(revision, data.row_version)
     before = revision_data(revision)
     definitions_by_id = {item.id: item for item in db.scalars(select(ParameterDefinition).where(ParameterDefinition.is_active.is_(True))).all()}
@@ -294,9 +307,10 @@ def save_draft(revision_id: int, data: DraftInput, db: Session = Depends(get_db)
 
 @router.post("/revisions/{revision_id}/submit")
 def submit(revision_id: int, data: VersionInput, db: Session = Depends(get_db), user: User = Depends(writer)):
-    revision = get_revision(db, revision_id)
+    revision = get_revision_locked(db, revision_id)
     if revision.status != "DRAFT":
         fail(409, "Ke schválení lze poslat jen draft.")
+    check_author(revision, user)
     check_version(revision, data.row_version)
     if not revision.product_name or not revision.change_reason or not revision.parameters:
         fail(422, "Vyplňte výrobek, důvod revize a alespoň jeden parametr.")
@@ -310,7 +324,7 @@ def submit(revision_id: int, data: VersionInput, db: Session = Depends(get_db), 
 
 @router.post("/revisions/{revision_id}/return")
 def return_draft(revision_id: int, data: ReturnInput, db: Session = Depends(get_db), user: User = Depends(approver)):
-    revision = get_revision(db, revision_id)
+    revision = get_revision_locked(db, revision_id)
     if revision.status != "IN_REVIEW":
         fail(409, "Vrátit lze jen revizi ve schvalování.")
     check_version(revision, data.row_version)
@@ -324,7 +338,7 @@ def return_draft(revision_id: int, data: ReturnInput, db: Session = Depends(get_
 
 @router.post("/revisions/{revision_id}/approve")
 def approve(revision_id: int, data: VersionInput, db: Session = Depends(get_db), user: User = Depends(approver)):
-    revision = get_revision(db, revision_id)
+    revision = get_revision_locked(db, revision_id)
     if revision.status != "IN_REVIEW":
         fail(409, "Schválit lze jen revizi ve schvalování.")
     check_version(revision, data.row_version)
