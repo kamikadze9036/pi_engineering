@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api, issuePdf, setSession } from './api';
 import type { Definition, MesItem, Parameter, Revision, Spec, Template, User } from './types';
 
@@ -23,11 +23,25 @@ const fromParameter = (p: Parameter, index: number): DraftRow => ({
   numeric_target: p.numeric_target ?? '', numeric_min: p.numeric_min ?? '', numeric_max: p.numeric_max ?? '',
   text_value: p.text_value ?? '', boolean_value: p.boolean_value ?? false, note: p.note ?? '',
 });
-const toDraft = (revision: Revision): Draft => ({
-  product_name: revision.product_name, material_name: revision.material_name,
-  process_note: revision.process_note, change_reason: revision.change_reason,
-  rows: revision.parameters.map(fromParameter),
+const emptyRow = (definition: Definition, position?: { key: string; label: string }): DraftRow => ({
+  key: `template-${definition.id}-${position?.key ?? 'single'}`, definition_id: definition.id,
+  position_key: position?.key ?? '', position_label: position?.label ?? '', numeric_target: '',
+  numeric_min: '', numeric_max: '', text_value: '', boolean_value: false, note: '',
 });
+const toDraft = (revision: Revision, definitions: Definition[]): Draft => {
+  const existing = new Map(revision.parameters.map((parameter, index) =>
+    [`${parameter.definition_id}:${parameter.position_key}`, fromParameter(parameter, index)]));
+  const rows = definitions.flatMap(definition => {
+    const slots = definition.positions.length ? definition.positions : [{ key: '', label: '' }];
+    return slots.map(position => {
+      const saved = existing.get(`${definition.id}:${position.key}`);
+      return saved ? { ...saved, key: `template-${definition.id}-${position.key || 'single'}` }
+        : emptyRow(definition, position);
+    });
+  });
+  return { product_name: revision.product_name, material_name: revision.material_name,
+    process_note: revision.process_note, change_reason: revision.change_reason, rows };
+};
 const shownDate = (value: string | null) => value ? new Date(value).toLocaleString('cs-CZ') : '—';
 const shownNumber = (value: string | null) => value === null ? '—'
   : new Intl.NumberFormat('cs-CZ', { maximumFractionDigits: 4 }).format(Number(value));
@@ -82,13 +96,13 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    setDraft(activeRevision?.status === 'DRAFT' &&
+    setDraft(activeRevision?.status === 'DRAFT' && definitions.length > 0 &&
       (user?.role === 'ADMIN' || user?.id === activeRevision.created_by)
-      ? toDraft(activeRevision) : null);
+      ? toDraft(activeRevision, definitions) : null);
     if (activeRevision && user) {
       api<Audit[]>(`/revisions/${activeRevision.id}/audit`).then(setAudit).catch(() => setAudit([]));
     } else setAudit([]);
-  }, [activeRevision?.id, activeRevision?.row_version, user]);
+  }, [activeRevision?.id, activeRevision?.row_version, user, definitions]);
 
   const categories = useMemo(() => Array.from(new Set(definitions.map(d => d.category))), [definitions]);
   const definitionById = useMemo(() => new Map(definitions.map(d => [d.id, d])), [definitions]);
@@ -144,7 +158,13 @@ export default function App() {
   async function saveDraft() {
     if (!draft || !activeRevision) return;
     await action(async () => {
-      const rows = draft.rows.filter(r => r.definition_id);
+      const rows = draft.rows.filter(row => {
+        const definition = definitionById.get(row.definition_id);
+        if (!definition) return false;
+        if (definition.value_type === 'NUMERIC') return row.numeric_target !== '';
+        if (definition.value_type === 'TEXT') return row.text_value.trim() !== '';
+        return true;
+      });
       const parameters = rows.map(r => {
         const definition = definitionById.get(r.definition_id)!;
         return {
@@ -300,24 +320,33 @@ export default function App() {
                 <label>Důvod revize <span>*</span><input value={draft.change_reason} onChange={e => setDraft({ ...draft, change_reason: e.target.value })} placeholder="Co se mění a proč" /></label>
                 <label>Procesní poznámka<input value={draft.process_note} onChange={e => setDraft({ ...draft, process_note: e.target.value })} placeholder="Volitelná instrukce" /></label>
               </div>
-              <div className="table-heading"><div><span className="eyebrow">Technologické hodnoty</span><h3>Parametry a tolerance</h3></div>
-                <button className="secondary" onClick={addRow}>+ Přidat parametr</button></div>
-              {draft.rows.length === 0 && <p className="empty-rows">Přidej první parametr. Opakované stupně a zóny rozlišíš pozicí.</p>}
+              <div className="table-heading"><div><span className="eyebrow">Technologické hodnoty</span><h3>Pole podle firemní návodky</h3></div>
+                <button className="secondary" onClick={addRow}>+ Vlastní parametr</button></div>
+              <p className="form-hint">Formulář obsahuje všechna pole z dodané návodky. Prázdné hodnoty se do revize neukládají, v PDF zůstanou jako prázdné buňky.</p>
               <div className="parameter-rows">
-                {draft.rows.map(row => {
+                {draft.rows.map((row, rowIndex) => {
                   const definition = definitionById.get(row.definition_id);
-                  return <div className="parameter-row" key={row.key}>
-                    <div className="row-top"><label>Parametr<select value={row.definition_id || ''}
+                  const previous = rowIndex > 0 ? definitionById.get(draft.rows[rowIndex - 1].definition_id) : null;
+                  const isTemplate = row.key.startsWith('template-');
+                  return <Fragment key={row.key}>
+                    {definition && definition.category !== previous?.category && <div className="parameter-category">
+                      <span>{definition.category}</span><small>{draft.rows.filter(item => definitionById.get(item.definition_id)?.category === definition.category).length} polí</small>
+                    </div>}
+                    <div className={`parameter-row ${isTemplate ? 'template-row' : ''}`}>
+                    <div className="row-top">{isTemplate && definition ? <div className="fixed-parameter"><b>{definition.name}</b>
+                      <small>{row.position_label || row.position_key || 'jedna hodnota'}</small></div> : <label>Parametr<select value={row.definition_id || ''}
                       onChange={e => updateRow(row.key, { definition_id: Number(e.target.value), position_key: '', position_label: '' })}>
                       <option value="">Vyber parametr</option>
                       {categories.map(category => <optgroup key={category} label={category}>
                         {definitions.filter(d => d.category === category).map(d => <option key={d.id} value={d.id}>{d.name} ({d.unit || d.value_type})</option>)}
                       </optgroup>)}
-                    </select></label>
-                    {definition?.position_kind !== 'NONE' && <label>Pozice<input value={row.position_key}
-                      onChange={e => updateRow(row.key, { position_key: e.target.value, position_label: e.target.value })}
-                      placeholder="1 / Zóna 2 / pevná" /></label>}
-                    <button className="remove" title="Odebrat parametr" onClick={() => setDraft(old => old && { ...old, rows: old.rows.filter(r => r.key !== row.key) })}>×</button></div>
+                    </select></label>}
+                    {!isTemplate && definition && definition.position_kind !== 'NONE' && <label>Pozice{definition.positions.length ? <select value={row.position_key}
+                      onChange={e => { const slot = definition.positions.find(item => item.key === e.target.value); updateRow(row.key, { position_key: e.target.value, position_label: slot?.label ?? e.target.value }); }}>
+                      <option value="">Vyber pozici</option>{definition.positions.map(position => <option key={position.key} value={position.key}>{position.label}</option>)}</select> : <input value={row.position_key}
+                        onChange={e => updateRow(row.key, { position_key: e.target.value, position_label: e.target.value })}
+                        placeholder="1 / Zóna 2 / pevná" />}</label>}
+                    {!isTemplate && <button className="remove" title="Odebrat parametr" onClick={() => setDraft(old => old && { ...old, rows: old.rows.filter(r => r.key !== row.key) })}>×</button>}</div>
                     {definition?.value_type === 'TEXT' ? <label>Textová hodnota<input value={row.text_value} onChange={e => updateRow(row.key, { text_value: e.target.value })} /></label>
                       : definition?.value_type === 'BOOLEAN' ? <label className="checkbox"><input type="checkbox" checked={row.boolean_value} onChange={e => updateRow(row.key, { boolean_value: e.target.checked })} /> Ano</label>
                       : <div className="value-grid">
@@ -326,8 +355,8 @@ export default function App() {
                         <label>Maximum<input type="number" step="any" value={row.numeric_max} onChange={e => updateRow(row.key, { numeric_max: e.target.value })} /></label>
                         <span className="unit">{definition?.unit || ''}</span>
                       </div>}
-                    <label className="note-label">Poznámka k hodnotě<input value={row.note} onChange={e => updateRow(row.key, { note: e.target.value })} /></label>
-                  </div>;
+                    {!isTemplate && <label className="note-label">Poznámka k hodnotě<input value={row.note} onChange={e => updateRow(row.key, { note: e.target.value })} /></label>}
+                  </div></Fragment>;
                 })}
               </div>
               <div className="editor-actions"><button className="primary" disabled={busy} onClick={saveDraft}>Uložit draft</button>

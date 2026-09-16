@@ -3,53 +3,10 @@ import os
 
 from sqlalchemy import select
 
+from .catalog import DEFINITIONS
 from .database import SessionLocal
 from .models import ParameterDefinition, PdfTemplate, User
 from .security import hash_password, verify_password
-
-
-DEFINITIONS = [
-    # code, name, category, unit, position_kind, value_type
-    ("CUSTOMER", "Zákazník", "Základní údaje", "", "NONE", "TEXT"),
-    ("SAP_REFERENCE", "Číslo výrobku (SAP)", "Základní údaje", "", "NONE", "TEXT"),
-    ("CAVITIES", "Počet kavit", "Základní údaje", "", "NONE", "TEXT"),
-    ("TECHNICIAN_NAME", "Jméno technika", "Základní údaje", "", "NONE", "TEXT"),
-    ("SCREW_DIAMETER", "Průměr šroubu", "Základní údaje", "mm", "NONE", "NUMERIC"),
-    ("RAW_MATERIAL", "Vstupní materiál", "Základní údaje", "", "NONE", "TEXT"),
-    ("DRYING_TEMPERATURE", "Teplota sušení", "Základní údaje", "°C", "NONE", "NUMERIC"),
-    ("DRYING_TIME", "Čas sušení", "Základní údaje", "h", "NONE", "NUMERIC"),
-    ("MACHINE_PROGRAM", "Program vstřikolisu", "Základní údaje", "", "NONE", "TEXT"),
-    ("ROBOT_PROGRAM", "Program robota", "Základní údaje", "", "NONE", "TEXT"),
-    ("CLAMPING_FORCE", "Uzavírací síla", "Zavření, otevření, výstřik", "kN", "NONE", "NUMERIC"),
-    ("CLOSING_POSITION", "Dráha zavírání formy", "Zavření, otevření, výstřik", "mm", "SEQUENCE", "NUMERIC"),
-    ("CLOSING_SPEED", "Rychlost zavírání formy", "Zavření, otevření, výstřik", "%", "SEQUENCE", "NUMERIC"),
-    ("OPENING_POSITION", "Dráha otevírání formy", "Zavření, otevření, výstřik", "mm", "SEQUENCE", "NUMERIC"),
-    ("OPENING_SPEED", "Rychlost otevření", "Zavření, otevření, výstřik", "%", "SEQUENCE", "NUMERIC"),
-    ("EJECTOR_STROKE", "Zdvih vyhazovačů", "Zavření, otevření, výstřik", "mm", "NONE", "NUMERIC"),
-    ("CORE_NOTE", "Hydraulické jádro", "Hydraulické jádro", "", "NONE", "TEXT"),
-    ("MOLD_TEMPERATURE", "Teplota formy", "Teplota formy", "°C", "LABEL", "NUMERIC"),
-    ("HOT_RUNNER_TEMPERATURE", "Teplota horkého vtoku", "Teplota horkých vtoků", "°C", "SEQUENCE", "NUMERIC"),
-    ("BARREL_TEMPERATURE", "Teplota válce", "Teplota válce", "°C", "LABEL", "NUMERIC"),
-    ("NOZZLE_TEMPERATURE", "Teplota trysky", "Teplota válce", "°C", "NONE", "NUMERIC"),
-    ("INJECTION_SPEED", "Rychlost vstřikování", "Vstřikování, dávka, jednotka", "mm/s", "SEQUENCE", "NUMERIC"),
-    ("MAX_INJECTION_PRESSURE", "Limit tlaku", "Vstřikování, dávka, jednotka", "bar", "NONE", "NUMERIC"),
-    ("TRANSFER_POSITION", "Poloha přepnutí", "Vstřikování, dávka, jednotka", "mm", "NONE", "NUMERIC"),
-    ("TRANSFER_PRESSURE", "Tlak při přepnutí", "Vstřikování, dávka, jednotka", "bar", "NONE", "NUMERIC"),
-    ("CUSHION", "Polštář", "Vstřikování, dávka, jednotka", "mm", "NONE", "NUMERIC"),
-    ("HOLDING_PRESSURE", "Dotlak", "Vstřikování, dávka, jednotka", "bar", "SEQUENCE", "NUMERIC"),
-    ("HOLDING_TIME", "Čas dotlaku", "Vstřikování, dávka, jednotka", "s", "SEQUENCE", "NUMERIC"),
-    ("DOSING_STROKE", "Zdvih dávkování", "Vstřikování, dávka, jednotka", "mm", "NONE", "NUMERIC"),
-    ("DECOMPRESSION", "Dekomprese", "Vstřikování, dávka, jednotka", "mm", "LABEL", "NUMERIC"),
-    ("DOSING_SPEED", "Rychlost dávky", "Vstřikování, dávka, jednotka", "%", "SEQUENCE", "NUMERIC"),
-    ("BACK_PRESSURE", "Protitlak", "Vstřikování, dávka, jednotka", "bar", "SEQUENCE", "NUMERIC"),
-    ("INJECTION_TIME", "Doba vstřikování", "Specifický časový limit", "s", "NONE", "NUMERIC"),
-    ("COOLING_TIME", "Doba chlazení", "Specifický časový limit", "s", "NONE", "NUMERIC"),
-    ("CYCLE_TIME", "Doba cyklu", "Specifický časový limit", "s", "NONE", "NUMERIC"),
-    ("SHOT_WEIGHT", "Váha vstřiku s vtokem", "Kontrola", "g", "NONE", "NUMERIC"),
-    ("SPRUE_WEIGHT", "Hmotnost vtoku", "Kontrola", "g", "NONE", "NUMERIC"),
-    ("STARTUP_PIECES", "Počet rozjezdových kusů", "Kontrola", "ks", "NONE", "NUMERIC"),
-    ("SPECIAL_NOTE", "Specifická poznámka", "Poznámky", "", "NONE", "TEXT"),
-]
 
 
 def run() -> None:
@@ -82,12 +39,23 @@ def run() -> None:
                 account = db.scalar(select(User).where(User.username == username))
                 if account and account.email.endswith("@example.invalid"):
                     account.is_active = False
-        existing = set(db.scalars(select(ParameterDefinition.code)).all())
-        for order, (code, name, category, unit, position_kind, value_type) in enumerate(DEFINITIONS, start=1):
-            if code not in existing:
-                db.add(ParameterDefinition(code=code, name=name, category=category,
-                                           value_type=value_type, unit=unit,
-                                           position_kind=position_kind, sort_order=order))
+        existing = {item.code: item for item in db.scalars(select(ParameterDefinition)).all()}
+        catalogue_codes = {item.code for item in DEFINITIONS}
+        for code, definition in existing.items():
+            if code not in catalogue_codes:
+                definition.is_active = False
+        for order, spec in enumerate(DEFINITIONS, start=1):
+            definition = existing.get(spec.code)
+            if not definition:
+                definition = ParameterDefinition(code=spec.code)
+                db.add(definition)
+            definition.name = spec.name
+            definition.category = spec.category
+            definition.value_type = spec.value_type
+            definition.unit = spec.unit
+            definition.position_kind = spec.position_kind
+            definition.sort_order = order
+            definition.is_active = True
         if not db.scalar(select(PdfTemplate).where(PdfTemplate.is_active.is_(True))):
             db.add(PdfTemplate(version="v1", title="OPERAČNÍ NÁVODKA",
                                settings={"accent_color": "#153AA8", "section_color": "#E2E4E7",

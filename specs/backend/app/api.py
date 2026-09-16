@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .database import get_db
+from .catalog import BY_CODE
 from .mes import MesCatalog, MesUnavailable
 from .models import Assignment, AuditEntry, ParameterDefinition, ParameterValue, PdfDocument, PdfTemplate, Revision, Spec, User, utc_now
 from .pdf import generate_pdf
@@ -197,7 +198,9 @@ def definitions(db: Session = Depends(get_db), _: User = Depends(current_user)):
     rows = db.scalars(select(ParameterDefinition).where(ParameterDefinition.is_active.is_(True)).order_by(ParameterDefinition.sort_order)).all()
     return [{"id": item.id, "code": item.code, "name": item.name,
              "category": item.category, "value_type": item.value_type, "unit": item.unit,
-             "position_kind": item.position_kind} for item in rows]
+             "position_kind": item.position_kind,
+             "positions": [{"key": key, "label": label} for key, label in BY_CODE.get(item.code, ()).positions]
+             if item.code in BY_CODE else []} for item in rows]
 
 
 @router.get("/specs")

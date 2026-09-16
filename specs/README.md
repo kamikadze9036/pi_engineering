@@ -1,6 +1,6 @@
 # Technologické předpisy - první testovací verze
 
-Samostatná aplikace vedle ProcessLogu. Ukládá technologické předpisy a revize do PostgreSQL, čte stroje/formy z read-only exportu Cyklades a vydává archivované PDF návodky. Schválená revize zůstává neměnná; další změna vzniká její kopií. První PDF vzhled vychází z `U10_3045_ON_260728_900-002_Schwarz.pdf`, zatím bez všech strojově specifických polí.
+Samostatná aplikace vedle ProcessLogu. Ukládá technologické předpisy a revize do PostgreSQL, čte stroje/formy z read-only exportu Cyklades a vydává archivované PDF návodky. Schválená revize zůstává neměnná; další změna vzniká její kopií. Datový formulář a jednostránkový PDF export kopírují sekce, pořadí, opakované stupně a zóny z `U10_3045_ON_260728_900-002_Schwarz.pdf` (81 typů parametrů, 253 jednotlivých polí).
 
 ## Zítřejší offline test
 
@@ -20,7 +20,7 @@ Otevřít `http://localhost:8081`. V testovacím režimu (`SPECS_DEMO_MODE=true`
 | `schvalovatel` | APPROVER | hodnota `SPECS_DEMO_PASSWORD` |
 | `admin` | ADMIN | hodnota `SPECS_ADMIN_PASSWORD` |
 
-Test: přihlásit se jako `inzenyr`, založit kombinaci, doplnit výrobek, důvod a několik hodnot včetně pozic/teplot, uložit draft a odeslat. Přihlásit se jako `schvalovatel`, schválit revizi a použít **Vydat / otevřít PDF**. Pak lze založit novou revizi kopií platné. Admin může publikovat další verzi vzhledu PDF (nadpis, barvy, anglické podnadpisy); již vydané PDF zůstává archivované.
+Test: přihlásit se jako `inzenyr`, založit kombinaci a projít formulář po sekcích shodných s návodkou. Prázdná pole lze nechat prázdná; do revize se ukládají jen vyplněné hodnoty a dvě přepínací pole. Doplnit výrobek, důvod a několik profilů/teplot, uložit draft a odeslat. Přihlásit se jako `schvalovatel`, schválit revizi a použít **Vydat / otevřít PDF**. Pak lze založit novou revizi kopií platné. Admin může publikovat další verzi vzhledu PDF (nadpis, barvy, anglické podnadpisy); již vydané PDF zůstává archivované.
 
 Data jsou ve volumes `specs_pgdata` a `specs_pdf`. Běžné `docker compose down` je nesmaže. Nepoužívat `down -v`, pokud má historie zůstat zachovaná.
 

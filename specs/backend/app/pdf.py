@@ -1,8 +1,4 @@
-"""First PDF layout inspired by the uploaded ENGEL operation sheet.
-
-The source example is much denser than this MVP and has machine-specific fields.
-Layout settings are read from a versioned template; issued PDFs are archived.
-"""
+"""Single-sheet ENGEL operation instruction based on the supplied company form."""
 import io
 import os
 from collections import defaultdict
@@ -17,27 +13,9 @@ from reportlab.pdfgen import canvas
 from .models import PdfTemplate, Revision
 
 
-LEFT = ["Zavření, otevření, výstřik", "Hydraulické jádro", "Poznámky"]
-RIGHT = ["Teplota formy", "Teplota horkých vtoků", "Teplota válce",
-         "Vstřikování, dávka, jednotka", "Specifický časový limit", "Kontrola"]
-ENGLISH = {
-    "Zavření, otevření, výstřik": "CLOSING, OPENING, EJECTION",
-    "Hydraulické jádro": "HYDRAULIC CORE",
-    "Poznámky": "REMARKS",
-    "Teplota formy": "MOULD TEMPERATURE",
-    "Teplota horkých vtoků": "HOT RUNNER TEMPERATURE",
-    "Teplota válce": "CYLINDER TEMPERATURE",
-    "Vstřikování, dávka, jednotka": "INJECTION, DOSING, UNIT",
-    "Specifický časový limit": "SPECIFIED TIME OUT",
-    "Kontrola": "CONTROL",
-}
-ALIASES = {
-    "Dotlak": "Vstřikování, dávka, jednotka",
-    "Vstřikování": "Vstřikování, dávka, jednotka",
-    "Temperace nástroje": "Teplota formy",
-    "Teploty válce": "Teplota válce",
-    "Časy": "Specifický časový limit",
-}
+PAGE_W, PAGE_H = letter
+BLACK = colors.HexColor("#171717")
+GRID = colors.HexColor("#575757")
 
 
 def register_fonts() -> tuple[str, str]:
@@ -60,206 +38,358 @@ def fmt_number(number: Decimal | None) -> str:
     return format(number.normalize(), "f").replace(".", ",")
 
 
-def display_value(item) -> str:
-    if item.definition_type == "NUMERIC":
-        value = fmt_number(item.numeric_target)
-        if item.numeric_min is not None or item.numeric_max is not None:
-            value += f"  [{fmt_number(item.numeric_min) or '-'} až {fmt_number(item.numeric_max) or '-'}]"
-        return f"{value} {item.unit}".strip()
-    if item.definition_type == "BOOLEAN":
-        return "Ano" if item.boolean_value else "Ne"
-    return item.text_value or ""
+class SheetValues:
+    def __init__(self, revision: Revision):
+        self.items = defaultdict(dict)
+        for item in revision.parameters:
+            self.items[item.definition_code][item.position_key or ""] = item
+
+    def item(self, code: str, position: str = ""):
+        return self.items.get(code, {}).get(position)
+
+    def raw(self, code: str, position: str = "", blank: str = "·") -> str:
+        item = self.item(code, position)
+        if not item:
+            return blank
+        if item.definition_type == "NUMERIC":
+            return fmt_number(item.numeric_target) or blank
+        if item.definition_type == "BOOLEAN":
+            return "ANO" if item.boolean_value else "NE"
+        return item.text_value or blank
+
+    def bounds(self, code: str, position: str = "") -> tuple[str, str]:
+        item = self.item(code, position)
+        return (fmt_number(item.numeric_min) if item else "",
+                fmt_number(item.numeric_max) if item else "")
 
 
-def entries_for(revision: Revision, categories: list[str]):
-    grouped = defaultdict(list)
-    for item in revision.parameters:
-        grouped[ALIASES.get(item.definition_category, item.definition_category)].append(item)
-    entries = []
-    for category in categories:
-        if not grouped[category]:
-            continue
-        entries.append(("heading", category))
-        for item in grouped[category]:
-            entries.append(("row", item))
-    return entries
+class Sheet:
+    def __init__(self, c: canvas.Canvas, template: PdfTemplate, font: str, bold: str):
+        self.c, self.template, self.font, self.bold = c, template, font, bold
+        self.accent = colors.HexColor(template.settings.get("accent_color", "#153AA8"))
+        self.section = colors.HexColor(template.settings.get("section_color", "#E2E4E7"))
+        self.english = template.settings.get("show_english_subtitle", True)
+        c.setLineWidth(.35)
+        c.setStrokeColor(GRID)
 
+    def fit(self, value: object, width: float, font: str, size: float) -> str:
+        text = str(value or "")
+        if pdfmetrics.stringWidth(text, font, size) <= width:
+            return text
+        while text and pdfmetrics.stringWidth(text + "…", font, size) > width:
+            text = text[:-1]
+        return text + "…"
 
-def wrap_lines(value: str, font: str, size: float, max_width: float) -> list[str]:
-    lines = []
-    line = ""
-    for word in str(value).split():
-        candidate = f"{line} {word}".strip()
-        if line and pdfmetrics.stringWidth(candidate, font, size) > max_width:
-            lines.append(line)
-            line = word
+    def text(self, x: float, y: float, value: object, width: float, size: float = 5.4,
+             font: str | None = None, color=BLACK, align: str = "left") -> None:
+        font = font or self.font
+        value = self.fit(value, width, font, size)
+        self.c.setFont(font, size)
+        self.c.setFillColor(color)
+        if align == "center":
+            self.c.drawCentredString(x + width / 2, y, value)
+        elif align == "right":
+            self.c.drawRightString(x + width, y, value)
         else:
-            line = candidate
-        if pdfmetrics.stringWidth(line, font, size) > max_width:
-            fragment = ""
-            for char in line:
-                if fragment and pdfmetrics.stringWidth(fragment + char, font, size) > max_width:
-                    lines.append(fragment)
-                    fragment = char
-                else:
-                    fragment += char
-            line = fragment
-    if line or not lines:
-        lines.append(line)
-    return lines
+            self.c.drawString(x, y, value)
+
+    def box(self, x: float, y_top: float, width: float, height: float, fill=None) -> None:
+        if fill:
+            self.c.setFillColor(fill)
+            self.c.rect(x, y_top - height, width, height, fill=1, stroke=1)
+        else:
+            self.c.rect(x, y_top - height, width, height, fill=0, stroke=1)
+
+    def section_header(self, x: float, y_top: float, width: float, cz: str, en: str) -> float:
+        height = 15
+        self.box(x, y_top, width, height, self.section)
+        self.text(x + 3, y_top - 6, cz.upper(), width - 6, 6.2, self.bold, align="center")
+        if self.english:
+            self.text(x + 3, y_top - 12, en.upper(), width - 6, 4.2, self.font, align="center")
+        return y_top - height
+
+    def labelled_cell(self, x: float, y_top: float, width: float, height: float,
+                      cz: str, en: str, value: str, unit: str = "") -> None:
+        self.box(x, y_top, width, height)
+        self.text(x + 3, y_top - 6, cz, width - 6, 4.6, self.bold)
+        if self.english:
+            self.text(x + 3, y_top - 11, en, width - 6, 3.6)
+        rendered = f"{value} {unit}".strip()
+        self.text(x + 3, y_top - height + 4, rendered, width - 6, 6.0, self.bold, self.accent, "right")
+
+    def sequence(self, x: float, y_top: float, width: float, height: float,
+                 cz: str, en: str, values: list[str], unit: str = "") -> float:
+        label_w, unit_w = width * .32, 23
+        value_w = (width - label_w - unit_w) / len(values)
+        self.box(x, y_top, width, height)
+        self.c.line(x + label_w, y_top, x + label_w, y_top - height)
+        self.text(x + 3, y_top - 7, cz, label_w - 6, 4.4, self.bold)
+        if self.english:
+            self.text(x + 3, y_top - 12, en, label_w - 6, 3.4)
+        for index, value in enumerate(values):
+            cell_x = x + label_w + value_w * index
+            if index:
+                self.c.line(cell_x, y_top, cell_x, y_top - height)
+            self.text(cell_x, y_top - 4.5, str(index + 1), value_w, 3.3, self.font, align="center")
+            self.text(cell_x + 1, y_top - height + 4, value, value_w - 2, 5.2, self.bold,
+                      self.accent, "center")
+        self.c.line(x + width - unit_w, y_top, x + width - unit_w, y_top - height)
+        self.text(x + width - unit_w, y_top - height + 4, unit, unit_w, 4.2, self.font, align="center")
+        return y_top - height
+
+    def pair_row(self, x: float, y_top: float, width: float, height: float,
+                 items: list[tuple[str, str, str, str]]) -> float:
+        cell = width / len(items)
+        for index, (cz, en, value, unit) in enumerate(items):
+            self.labelled_cell(x + index * cell, y_top, cell, height, cz, en, value, unit)
+        return y_top - height
 
 
-def row_layout(item, font: str, bold: str):
-    label = item.definition_name
-    if item.position_label or item.position_key:
-        label += f" - {item.position_label or item.position_key}"
-    labels = wrap_lines(label, font, 7, 142)
-    main = (f"{fmt_number(item.numeric_target)} {item.unit}".strip() if item.definition_type == "NUMERIC"
-            else display_value(item))
-    values = wrap_lines(main, bold, 8, 118)
-    tolerance = ""
-    if item.definition_type == "NUMERIC" and (item.numeric_min is not None or item.numeric_max is not None):
-        tolerance = f"min {fmt_number(item.numeric_min) or '-'}  max {fmt_number(item.numeric_max) or '-'}"
-    notes = wrap_lines(item.note, font, 6, 265) if item.note else []
-    main_lines = max(len(labels), len(values))
-    height = 16 + main_lines * 10 + (10 if tolerance else 0) + len(notes) * 9
-    return labels, values, tolerance, notes, max(25, height)
+def positions(values: SheetValues, code: str, keys) -> list[str]:
+    return [values.raw(code, str(key)) for key in keys]
 
 
-def split_pages(entries, font: str, bold: str, capacity: float = 520):
-    pages = [[]]
-    used = 0
-    heading = None
-    for entry in entries:
-        height = row_layout(entry[1], font, bold)[-1] if entry[0] == "row" else 29
-        if used + height > capacity:
-            pages.append([])
-            used = 0
-            if entry[0] == "row" and heading:
-                pages[-1].append(("heading", heading))
-                used += 29
-        pages[-1].append(entry)
-        used += height
-        if entry[0] == "heading":
-            heading = entry[1]
-    return pages
+def draw_header(sheet: Sheet, revision: Revision, values: SheetValues) -> float:
+    x, width, y = 14, 584, 779
+    sheet.box(x, y, width, 38)
+    sheet.c.line(83, y, 83, y - 38)
+    sheet.c.line(515, y, 515, y - 38)
+    sheet.text(19, y - 17, "HESS", 58, 15, sheet.bold, colors.HexColor("#18345D"), "center")
+    title = sheet.template.title
+    if "ENGEL" not in title.upper():
+        title += ": ENGEL (CC100/200/300)"
+    sheet.text(88, y - 14, title, 422, 9.1, sheet.bold, align="center")
+    if sheet.english:
+        sheet.text(88, y - 27, "INJECTION ADJUSTMENT SHEET (TYPE): ENGEL (CC100/200/300)",
+                   422, 5.2, sheet.font, sheet.accent, "center")
+    sheet.text(519, y - 8, "Stránka / Page", 74, 4.2, sheet.bold)
+    sheet.text(519, y - 17, "1 / 1", 74, 6, sheet.bold, sheet.accent, "right")
+    sheet.text(519, y - 27, "Číslo DT / N° DT", 74, 4.2, sheet.bold)
+    sheet.text(519, y - 35, f"{revision.process_spec_id:04d} / R{revision.revision_number}",
+               74, 5.2, sheet.bold, sheet.accent, "right")
+    y -= 38
+
+    cells = [
+        (120, "Zákazník", "Customer", values.raw("CUSTOMER")),
+        (230, "Jméno výrobku", "Part name",
+         f"{revision.product_name or '·'}  {values.raw('PART_VARIANT', blank='')}".strip()),
+        (160, "Číslo výrobku (SAP)", "Reference (SAP)", values.raw("SAP_REFERENCE")),
+        (74, "Počet kavit", "Nber of cavities", values.raw("CAVITIES")),
+    ]
+    cursor = x
+    for cell_w, cz, en, value in cells:
+        sheet.labelled_cell(cursor, y, cell_w, 29, cz, en, value)
+        cursor += cell_w
+    y -= 29
+    cells = [
+        (150, "Jméno technika", "Technician name", values.raw("TECHNICIAN_NAME")),
+        (185, "Číslo lisu", "Press number", revision.mes_machine_code or "·"),
+        (125, "Průměr šroubu", "Screw diameter", values.raw("SCREW_DIAMETER"), "mm"),
+        (124, "Průměr trysky", "Nozzle diameter", values.raw("NOZZLE_DIAMETER"), "mm"),
+    ]
+    cursor = x
+    for cell in cells:
+        cell_w, cz, en, value, *unit = cell
+        sheet.labelled_cell(cursor, y, cell_w, 28, cz, en, value, unit[0] if unit else "")
+        cursor += cell_w
+    y -= 28
+    cells = [
+        (260, "Vstupní materiál", "Raw material", values.raw("RAW_MATERIAL", blank=revision.material_name or "·")),
+        (92, "Recyklovaný materiál", "Regrind material", values.raw("REGRIND_PERCENT"), "%"),
+        (132, "Teplota sušení", "Drying temperature", values.raw("DRYING_TEMPERATURE"), "°C ±10°C"),
+        (100, "Čas", "Time", values.raw("DRYING_TIME"), "h"),
+    ]
+    cursor = x
+    for cell in cells:
+        cell_w, cz, en, value, *unit = cell
+        sheet.labelled_cell(cursor, y, cell_w, 28, cz, en, value, unit[0] if unit else "")
+        cursor += cell_w
+    y -= 28
+    cells = [
+        (280, "Program vstřikolisu", "Machine program", values.raw("MACHINE_PROGRAM")),
+        (76, "Robot", "Robot", values.raw("ROBOT")),
+        (228, "Program robota", "Robot program", values.raw("ROBOT_PROGRAM")),
+    ]
+    cursor = x
+    for cell_w, cz, en, value in cells:
+        sheet.labelled_cell(cursor, y, cell_w, 27, cz, en, value)
+        cursor += cell_w
+    return y - 27
 
 
-def entries_height(entries, font: str, bold: str) -> int:
-    return sum(29 if kind == "heading" else row_layout(value, font, bold)[-1]
-               for kind, value in entries)
+def draw_left(sheet: Sheet, revision: Revision, values: SheetValues, y: float) -> None:
+    x, width = 14, 284
+    y = sheet.section_header(x, y, width, "Zavření, otevření, výstřik", "Closing, opening, ejection")
+    y = sheet.pair_row(x, y, width, 15, [("Uzavírací síla", "Clamping force", values.raw("CLAMPING_FORCE"), "kN")])
+    y = sheet.sequence(x, y, width, 18, "Dráha zavírání formy", "Closing stroke", positions(values, "CLOSING_POSITION", range(1, 7)), "mm")
+    y = sheet.sequence(x, y, width, 18, "Rychlost zavření", "Closing speed", positions(values, "CLOSING_SPEED", range(1, 7)), "%")
+    y = sheet.sequence(x, y, width, 18, "Dráha ochrany formy", "Mould protection stroke", positions(values, "MOLD_PROTECTION_POSITION", range(1, 7)), "mm")
+    y = sheet.sequence(x, y, width, 18, "Síla ochrany formy", "Mould protection force", positions(values, "MOLD_PROTECTION_FORCE", range(1, 7)), "%")
+    y = sheet.pair_row(x, y, width, 17, [
+        ("Dráha ochrany formy", "Mould protection stroke", values.raw("MOLD_PROTECTION_STROKE"), "mm"),
+        ("Doba kontroly", "Protection time", values.raw("MOLD_PROTECTION_TIME"), "s"),
+        ("Rychloposuv uzavřen", "High speed locking", values.raw("HIGH_SPEED_LOCKING"), "mm"),
+    ])
+    y = sheet.sequence(x, y, width, 18, "Dráha otevírání formy", "Opening stroke profile", positions(values, "OPENING_POSITION", range(1, 7)), "mm")
+    y = sheet.sequence(x, y, width, 18, "Rychlost otevření", "Opening speed", positions(values, "OPENING_SPEED", range(1, 7)), "%")
+    y = sheet.pair_row(x, y, width, 16, [("Dráha otevření", "Opening stroke", values.raw("OPENING_STROKE"), "mm")])
+
+    y = sheet.section_header(x, y, width, "Vyhazovače", "Ejector")
+    y = sheet.pair_row(x, y, width, 18, [
+        ("Pozice vyhazovačů", "Ejector pins outset", values.raw("EJECTOR_START_POSITION"), "mm"),
+        ("Kontrolovaná pozice", "Position controlled", values.raw("EJECTOR_CONTROLLED_POSITION"), "mm"),
+    ])
+    y = sheet.pair_row(x, y, width, 18, [
+        ("Reálná délka", "Real ejection stroke", values.raw("EJECTOR_REAL_STROKE"), "mm"),
+        ("Čas", "Time", values.raw("EJECTOR_TIME"), "s"),
+    ])
+    y = sheet.pair_row(x, y, width, 17, [
+        ("Priorita VEN", "Priority OUT", values.raw("EJECTOR_PRIORITY_OUT"), ""),
+        ("Priorita DOVNITŘ", "Priority IN", values.raw("EJECTOR_PRIORITY_IN"), ""),
+    ])
+    y = sheet.sequence(x, y, width, 17, "Rychlost VEN / DOVNITŘ", "Ejector speed OUT / IN",
+                       [values.raw("EJECTOR_SPEED_OUT", "1"), values.raw("EJECTOR_SPEED_OUT", "2"),
+                        values.raw("EJECTOR_SPEED_IN", "1"), values.raw("EJECTOR_SPEED_IN", "2")], "%")
+    y = sheet.sequence(x, y, width, 17, "Tlak VEN / DOVNITŘ", "Ejector pressure OUT / IN",
+                       [values.raw("EJECTOR_PRESSURE_OUT", "1"), values.raw("EJECTOR_PRESSURE_OUT", "2"),
+                        values.raw("EJECTOR_PRESSURE_IN", "1"), values.raw("EJECTOR_PRESSURE_IN", "2")], "%")
+
+    y = sheet.section_header(x, y, width, "Hydraulické jádro", "Hydraulic core")
+    label_w, cell_w = 69, (width - 69) / 4
+    sheet.box(x, y, width, 14)
+    sheet.text(x + 3, y - 9, "Jádro / Core", label_w - 6, 4.4, sheet.bold)
+    for index in range(4):
+        cell_x = x + label_w + cell_w * index
+        sheet.c.line(cell_x, y, cell_x, y - 14)
+        title = f"{values.raw('CORE_NUMBER', str(index + 1))} {values.raw('CORE_TITLE', str(index + 1), '')}".strip()
+        sheet.text(cell_x + 1, y - 9, title, cell_w - 2, 4.4, sheet.bold, sheet.accent, "center")
+    y -= 14
+    core_rows = [
+        ("Priorita OUT", "CORE_PRIORITY_OUT", ""), ("Priorita IN", "CORE_PRIORITY_IN", ""),
+        ("Pozice OUT", "CORE_POSITION_OUT", "mm"), ("Pozice IN", "CORE_POSITION_IN", "mm"),
+        ("Rychlost OUT", "CORE_SPEED_OUT", "%"), ("Rychlost IN", "CORE_SPEED_IN", "%"),
+        ("Tlak OUT", "CORE_PRESSURE_OUT", "%"), ("Tlak IN", "CORE_PRESSURE_IN", "%"),
+    ]
+    for label, code, unit in core_rows:
+        sheet.box(x, y, width, 11)
+        sheet.text(x + 3, y - 7.5, label, label_w - 6, 4.0, sheet.font)
+        for index in range(4):
+            cell_x = x + label_w + cell_w * index
+            sheet.c.line(cell_x, y, cell_x, y - 11)
+            rendered = f"{values.raw(code, str(index + 1))} {unit}".strip()
+            sheet.text(cell_x + 1, y - 7.5, rendered, cell_w - 2, 4.3, sheet.bold, sheet.accent, "center")
+        y -= 11
+
+    y = sheet.section_header(x, y, width, "Poznámky", "Remarks")
+    sheet.box(x, y, width, y - 40)
+    note = values.raw("SPECIAL_NOTE", blank=revision.process_note or "")
+    lines = [line.strip() for line in note.splitlines() if line.strip()] or [" "]
+    cursor = y - 10
+    for line in lines[:7]:
+        sheet.text(x + 5, cursor, line, width - 10, 5.2, sheet.bold)
+        cursor -= 9
 
 
-def draw_text(c, x, y, text, max_width, font, size=8, color=colors.black):
-    c.setFont(font, size)
-    c.setFillColor(color)
-    value = str(text)
-    while value and pdfmetrics.stringWidth(value, font, size) > max_width:
-        value = value[:-2]
-    if value != str(text):
-        value += "…"
-    c.drawString(x, y, value)
+def draw_right(sheet: Sheet, values: SheetValues, y: float) -> None:
+    x, width = 302, 296
+    y = sheet.section_header(x, y, width, "Teplota formy", "Mould temperature")
+    y = sheet.pair_row(x, y, width, 24, [
+        ("Pohyblivá strana", "Moving side", values.raw("MOLD_TEMPERATURE", "MOVING"), "°C"),
+        ("Pevná strana", "Fixed side", values.raw("MOLD_TEMPERATURE", "FIXED"), "°C"),
+        ("Chlazení", "Cooling", f"{values.raw('MOLD_COOLING', 'MOVING')} / {values.raw('MOLD_COOLING', 'FIXED')}", ""),
+    ])
+    y = sheet.section_header(x, y, width, "Teplota horkých vtoků", "Hot runner tool temperature")
+    for start in (1, 11, 21):
+        y = sheet.sequence(x, y, width, 22, f"Zóny {start}–{start + 9}", "Zones",
+                           positions(values, "HOT_RUNNER_TEMPERATURE", range(start, start + 10)), "°C")
+    y = sheet.section_header(x, y, width, "Teplota válce", "Cylinder temperature")
+    barrel_keys = ["NOZZLE"] + [str(i) for i in range(1, 9)] + ["HOPPER"]
+    y = sheet.sequence(x, y, width, 24, "Tryska · 1–8 · Násypka", "Nozzle · zones · hopper",
+                       positions(values, "BARREL_TEMPERATURE", barrel_keys), "°C")
+    y = sheet.section_header(x, y, width, "Sekvence", "Sequential")
+    for cz, en, code, unit in (
+        ("Otevření vstřiku", "Opening injection", "SEQ_OPEN_INJECTION", "cm³"),
+        ("Uzavření vstřiku", "Closing injection", "SEQ_CLOSE_INJECTION", ""),
+        ("Otevření dotlaku", "Opening holding pressure", "SEQ_OPEN_HOLDING", ""),
+        ("Uzavření dotlaku", "Closing holding pressure", "SEQ_CLOSE_HOLDING", ""),
+    ):
+        y = sheet.sequence(x, y, width, 16, cz, en, positions(values, code, range(1, 9)), unit)
+
+    y = sheet.section_header(x, y, width, "Vstřikování, dávka, jednotka", "Injection, dosing, unit")
+    y = sheet.pair_row(x, y, width, 16, [("Zvýšený specifický tlak", "Boosting pressure", values.raw("BOOSTING_PRESSURE"), "")])
+    y = sheet.sequence(x, y, width, 17, "Pozice", "Position", positions(values, "INJECTION_POSITION", range(1, 10)), "mm")
+    y = sheet.sequence(x, y, width, 17, "Rychlost vstřiku", "Injection speed", positions(values, "INJECTION_SPEED", range(1, 10)), "mm/s")
+    y = sheet.pair_row(x, y, width, 18, [
+        ("Limit tlaku", "Pressure limit", values.raw("MAX_INJECTION_PRESSURE"), "bar"),
+        ("Tlak při přepnutí", "Switchover pressure", values.raw("TRANSFER_PRESSURE"), "bar"),
+        ("Vrchol tlaku", "Pressure peak", values.raw("PEAK_PRESSURE"), "bar"),
+    ])
+    y = sheet.pair_row(x, y, width, 18, [
+        ("Pozice přepnutí", "Switchover position", values.raw("TRANSFER_POSITION"), "mm"),
+        ("Polštář", "Cushion", values.raw("CUSHION"), "mm"),
+    ])
+    y = sheet.sequence(x, y, width, 17, "Čas dotlaku", "Holding pressure time", positions(values, "HOLDING_TIME_PROFILE", range(1, 10)), "s")
+    y = sheet.sequence(x, y, width, 17, "Dotlak", "Holding pressure", positions(values, "HOLDING_PRESSURE", range(1, 10)), "bar")
+    y = sheet.pair_row(x, y, width, 18, [
+        ("Zdvih dávkování", "Dosing stroke", values.raw("DOSING_STROKE"), "mm"),
+        ("Dekomprese před", "Decomp. before dosing", values.raw("DECOMP_BEFORE"), "mm"),
+        ("Dekomprese po", "After dosing", values.raw("DECOMP_AFTER"), "mm"),
+        ("Rychlost dekompr.", "Decomp. speed", values.raw("DECOMP_SPEED"), "%"),
+    ])
+    y = sheet.sequence(x, y, width, 17, "Rychlost dávky", "Dosing speed", positions(values, "DOSING_SPEED", range(1, 6)), "%")
+    y = sheet.sequence(x, y, width, 17, "Zpětný tlak", "Back pressure", positions(values, "BACK_PRESSURE", range(1, 6)), "bar")
+    y = sheet.pair_row(x, y, width, 16, [("Čas dávky", "Dosing time", values.raw("DOSING_TIME"), "s")])
+
+    y = sheet.section_header(x, y, width, "Specifický časový limit", "Specified time out")
+    y = sheet.pair_row(x, y, width, 23, [
+        ("Doba vstřikování", "Injection time", values.raw("INJECTION_TIME"), "s"),
+        ("Čas dotlaku", "Holding pressure time", values.raw("HOLDING_TIME"), "s"),
+        ("Doba chlazení", "Cooling time", values.raw("COOLING_TIME"), "s"),
+        ("Doba cyklu", "Cycle time", values.raw("CYCLE_TIME"), "s"),
+    ])
+    y = sheet.section_header(x, y, width, "Kontrola", "Control")
+    cushion_min, cushion_max = values.bounds("CUSHION_TOLERANCE")
+    injection_min, injection_max = values.bounds("INJECTION_TIME_TOLERANCE")
+    y = sheet.pair_row(x, y, width, 16, [
+        ("Tolerance polštáře", "Cushion tolerance", f"{cushion_min or '·'} – {cushion_max or '·'}", "mm"),
+        ("Tolerance vstřikování", "Injection tolerance", f"{injection_min or '·'} – {injection_max or '·'}", "s"),
+        ("Limit dávky", "Dosing time limit", values.raw("DOSING_TIME_LIMIT"), "s"),
+    ])
+    y = sheet.pair_row(x, y, width, 17, [
+        ("Váha vstřiku s vtokem", "Shot weight with sprue", values.raw("SHOT_WEIGHT"), "g"),
+        ("Hmotnost vtoku", "Sprue weight", values.raw("SPRUE_WEIGHT"), "g"),
+        ("Rozjezdové kusy", "Rejected shots", values.raw("STARTUP_PIECES"), "ks"),
+    ])
+    if y > 40:
+        sheet.box(x, y, width, y - 40)
 
 
-def draw_header(c, revision: Revision, template: PdfTemplate, font: str, bold: str,
-                author_name: str, approver_name: str, page: int, pages: int):
-    width, height = letter
-    accent = colors.HexColor(template.settings.get("accent_color", "#153AA8"))
-    c.setStrokeColor(colors.black)
-    c.rect(22, 42, width - 44, height - 64)
-    c.line(22, 661, width - 22, 661)
-    c.setFont(bold, 12)
-    c.drawCentredString(width / 2, 755, template.title)
-    if template.settings.get("show_english_subtitle", True):
-        c.setFillColor(accent)
-        c.setFont(font, 8)
-        c.drawCentredString(width / 2, 740, "INJECTION ADJUSTMENT SHEET")
-    c.setFillColor(colors.black)
-    c.setFont(font, 8)
-    c.drawRightString(width - 30, 755, f"Strana {page}/{pages}")
-    c.drawRightString(width - 30, 740, f"Revize {revision.revision_number}")
-    top = {item.definition_code: display_value(item) for item in revision.parameters
-           if item.definition_category == "Základní údaje"}
-    draw_text(c, 31, 724, f"Zákazník: {top.get('CUSTOMER', '-')}", 155, font, 8)
-    draw_text(c, 190, 724, f"Výrobek: {revision.product_name}", 250, bold, 9, accent)
-    draw_text(c, 446, 724, f"SAP: {top.get('SAP_REFERENCE', '-')}", 130, font, 8)
-    draw_text(c, 31, 708, f"Technik: {top.get('TECHNICIAN_NAME', '-')}", 160, font)
-    draw_text(c, 198, 708, f"Lis: {revision.mes_machine_code}  {revision.mes_machine_name}", 255, bold, 8, accent)
-    draw_text(c, 463, 708, f"Šroub: {top.get('SCREW_DIAMETER', '-')}", 110, font)
-    draw_text(c, 31, 692, f"Materiál: {top.get('RAW_MATERIAL', revision.material_name or '-')}", 310, font)
-    draw_text(c, 352, 692, f"Sušení: {top.get('DRYING_TEMPERATURE', '-')} / {top.get('DRYING_TIME', '-')}", 225, font)
-    draw_text(c, 31, 676, f"Program: {top.get('MACHINE_PROGRAM', '-')}", 300, font)
-    draw_text(c, 340, 676, f"Forma: {revision.mes_tool_code}  {revision.mes_tool_name}", 235, font)
-    c.setFont(font, 7)
-    c.drawString(30, 58, f"Autor: {author_name}")
-    c.drawString(222, 64, f"Schválil: {approver_name}")
-    c.drawString(222, 49, "Podpis po vytištění: __________________________")
-    c.drawRightString(width - 30, 58, revision.approved_at.strftime("%d.%m.%Y") if revision.approved_at else "")
-    c.line(22, 78, width - 22, 78)
-
-
-def draw_column(c, entries, x, template, font, bold):
-    accent = colors.HexColor(template.settings.get("accent_color", "#153AA8"))
-    section = colors.HexColor(template.settings.get("section_color", "#E2E4E7"))
-    y = 654
-    for kind, value in entries:
-        if kind == "heading":
-            c.setFillColor(section)
-            c.rect(x, y - 22, 276, 24, fill=1, stroke=1)
-            draw_text(c, x + 5, y - 9, value.upper(), 265, bold, 8)
-            if template.settings.get("show_english_subtitle", True):
-                draw_text(c, x + 5, y - 19, ENGLISH.get(value, ""), 265, font, 6, accent)
-            y -= 29
-            continue
-        item = value
-        labels, values, tolerance, notes, height = row_layout(item, font, bold)
-        c.setStrokeColor(colors.HexColor("#B7B7B7"))
-        c.rect(x, y - height + 5, 276, height - 2)
-        c.setFillColor(colors.black)
-        c.setFont(font, 7)
-        for index, line in enumerate(labels):
-            c.drawString(x + 5, y - 10 - index * 10, line)
-        c.setFillColor(accent)
-        c.setFont(bold, 8)
-        for index, line in enumerate(values):
-            c.drawString(x + 152, y - 10 - index * 10, line)
-        lower = max(len(labels), len(values))
-        if tolerance:
-            c.setFillColor(colors.black)
-            c.setFont(font, 6)
-            c.drawString(x + 152, y - 10 - lower * 10, tolerance)
-        for index, line in enumerate(notes):
-            c.setFillColor(colors.black)
-            c.setFont(font, 6)
-            c.drawString(x + 5, y - 10 - lower * 10 - (10 if tolerance else 0) - index * 9, line)
-        y -= height
-    return y
+def draw_footer(sheet: Sheet, revision: Revision, author_name: str, approver_name: str) -> None:
+    x, y, width, height = 14, 40, 584, 25
+    sheet.box(x, y, width, height)
+    sheet.text(x + 4, y - 7, "TOLERANCE HODNOT BEZ SPECIFIKOVANÝCH TOLERANCÍ JE ±10 %",
+               310, 4.6, sheet.bold)
+    sheet.text(x + 4, y - 17, "Autor / Technician", 70, 4.0)
+    sheet.text(x + 75, y - 17, author_name, 120, 5.0, sheet.bold, sheet.accent)
+    sheet.text(x + 205, y - 17, "Schválil / Approved", 83, 4.0)
+    sheet.text(x + 288, y - 17, approver_name, 115, 5.0, sheet.bold, sheet.accent)
+    date = revision.approved_at.strftime("%d.%m.%Y") if revision.approved_at else ""
+    sheet.text(x + 410, y - 17, "Datum / Date", 58, 4.0)
+    sheet.text(x + 468, y - 17, date, 108, 5.0, sheet.bold, sheet.accent)
 
 
 def generate_pdf(revision: Revision, template: PdfTemplate,
                  author_name: str, approver_name: str) -> bytes:
     font, bold = register_fonts()
-    categories = {ALIASES.get(item.definition_category, item.definition_category) for item in revision.parameters}
-    extras = sorted(categories - set(LEFT) - set(RIGHT) - {"Základní údaje"})
-    left_pages = split_pages(entries_for(revision, LEFT), font, bold, capacity=515)
-    right_pages = split_pages(entries_for(revision, RIGHT + extras), font, bold, capacity=515)
-    # Use free space beneath the left-hand sections for a continuation of the
-    # right-hand data. The supplied ENGEL example uses the whole single sheet.
-    if len(left_pages) == 1 and len(right_pages) > 1:
-        continuation = right_pages[1]
-        if entries_height(left_pages[0], font, bold) + entries_height(continuation, font, bold) <= 515:
-            left_pages[0].extend(continuation)
-            right_pages.pop(1)
-    count = max(len(left_pages), len(right_pages))
     stream = io.BytesIO()
     c = canvas.Canvas(stream, pagesize=letter)
     c.setTitle(f"Operační návodka - revize {revision.revision_number}")
-    for index in range(count):
-        draw_header(c, revision, template, font, bold, author_name, approver_name, index + 1, count)
-        if index < len(left_pages):
-            draw_column(c, left_pages[index], 26, template, font, bold)
-        if index < len(right_pages):
-            draw_column(c, right_pages[index], 310, template, font, bold)
-        c.showPage()
+    sheet = Sheet(c, template, font, bold)
+    values = SheetValues(revision)
+    body_top = draw_header(sheet, revision, values)
+    draw_left(sheet, revision, values, body_top)
+    draw_right(sheet, values, body_top)
+    draw_footer(sheet, revision, author_name, approver_name)
+    c.showPage()
     c.save()
     return stream.getvalue()

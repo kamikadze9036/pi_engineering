@@ -4,6 +4,7 @@ export type Definition = {
   id: number; code: string; name: string; category: string;
   value_type: 'NUMERIC' | 'TEXT' | 'BOOLEAN'; unit: string;
   position_kind: 'NONE' | 'SEQUENCE' | 'LABEL';
+  positions: { key: string; label: string }[];
 };
 export type Parameter = {
   definition_id: number; definition_code: string; definition_name: string;
