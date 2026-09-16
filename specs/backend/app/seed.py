@@ -3,9 +3,9 @@ import os
 
 from sqlalchemy import select
 
-from .catalog import DEFINITIONS
+from .catalog import DEFINITIONS, REFERENCE_U10_3045
 from .database import SessionLocal
-from .models import ParameterDefinition, PdfTemplate, User
+from .models import ParameterDefinition, PdfTemplate, ProcessTemplate, User
 from .security import hash_password, verify_password
 
 
@@ -61,6 +61,18 @@ def run() -> None:
                                settings={"accent_color": "#153AA8", "section_color": "#E2E4E7",
                                          "show_english_subtitle": True},
                                is_active=True, created_by=admin.id))
+        system_templates = (
+            ("ENGEL CC100/200/300 – prázdná návodka",
+             "Kompletní sada polí podle firemní návodky bez předvyplněných procesních hodnot.",
+             {"product_name": "", "material_name": "", "process_note": "", "parameters": []}),
+            ("ENGEL U10 / 3045 – ověřený vzor",
+             "Výchozí hodnoty přepsané z dodané schválené návodky U10 / 3045.",
+             REFERENCE_U10_3045),
+        )
+        for name, description, payload in system_templates:
+            if not db.scalar(select(ProcessTemplate).where(ProcessTemplate.name == name)):
+                db.add(ProcessTemplate(name=name, description=description, payload=payload,
+                                       is_system=True, is_active=True, created_by=admin.id))
 
 
 if __name__ == "__main__":

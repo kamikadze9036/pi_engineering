@@ -88,6 +88,20 @@ def test_end_to_end_revision_workflow(tmp_path, monkeypatch):
         with TestClient(app) as engineer:
             login = engineer.post("/api/v1/auth/login", json={"username": "inzenyr", "password": "test-password-123"})
             csrf = {"X-CSRF-Token": login.json()["csrf"]}
+            template = engineer.post("/api/v1/process-templates", headers=csrf,
+                                     json={"revision_id": revision_id, "name": "Ověřený cyklus 41 s",
+                                           "description": "Výchozí ověřený proces"})
+            assert template.status_code == 201
+            assert template.json()["parameter_count"] == 1
+            templates = engineer.get("/api/v1/process-templates").json()
+            assert templates[0]["name"] == "Ověřený cyklus 41 s"
+            from_template = engineer.post("/api/v1/specs", headers=csrf,
+                                          json={"machine_ref": "P-DEMO-02", "tool_ref": "MO-DEMO-02",
+                                                "template_id": template.json()["id"]})
+            assert from_template.status_code == 201
+            template_revision = from_template.json()["revisions"][0]
+            assert template_revision["product_name"] == "Testovací výrobek"
+            assert template_revision["parameters"][0]["numeric_target"] == "41.0000"
             assert engineer.put(f"/api/v1/revisions/{revision_id}/draft", headers=csrf,
                                 json={"row_version": approved.json()["row_version"]}).status_code == 409
             copied = engineer.post(f"/api/v1/specs/{spec_id}/revisions", headers=csrf)

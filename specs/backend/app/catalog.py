@@ -124,3 +124,85 @@ DEFINITIONS: tuple[DefinitionSpec, ...] = (
 
 
 BY_CODE = {item.code: item for item in DEFINITIONS}
+
+
+def _number(code: str, value, position: str = "", minimum=None, maximum=None) -> dict:
+    return {"definition_code": code, "position_key": position,
+            "position_label": dict(BY_CODE[code].positions).get(position, position),
+            "numeric_target": str(value),
+            "numeric_min": str(minimum) if minimum is not None else None,
+            "numeric_max": str(maximum) if maximum is not None else None,
+            "text_value": None, "boolean_value": None, "note": ""}
+
+
+def _text(code: str, value: str, position: str = "") -> dict:
+    return {"definition_code": code, "position_key": position,
+            "position_label": dict(BY_CODE[code].positions).get(position, position),
+            "numeric_target": None, "numeric_min": None, "numeric_max": None,
+            "text_value": value, "boolean_value": None, "note": ""}
+
+
+def _boolean(code: str, value: bool) -> dict:
+    return {"definition_code": code, "position_key": "", "position_label": "",
+            "numeric_target": None, "numeric_min": None, "numeric_max": None,
+            "text_value": None, "boolean_value": value, "note": ""}
+
+
+def _profile(code: str, values: tuple) -> list[dict]:
+    return [_number(code, value, str(index)) for index, value in enumerate(values, start=1)]
+
+
+# Values transcribed from the supplied, already approved U10 / 3045 sheet.  The
+# template is a starting point only; creating a draft never changes this data.
+REFERENCE_U10_3045 = {
+    "product_name": "Blende B-Säule oben schwarz",
+    "material_name": "Finalloy SMV-66 HM black",
+    "process_note": "UZAV. TRYSKA: HYDRAULICKY\nPohyblivá strana: studená voda",
+    "parameters": [
+        _text("CUSTOMER", "MATI"), _text("SAP_REFERENCE", "SEE BOM"),
+        _text("PART_VARIANT", "LH/RH"), _text("CAVITIES", "1+1"),
+        _text("TECHNICIAN_NAME", "J. Kubec"), _number("SCREW_DIAMETER", 105),
+        _text("RAW_MATERIAL", "Finalloy SMV-66 HM black (SAP: PPM0254)"),
+        _number("REGRIND_PERCENT", 0), _number("DRYING_TEMPERATURE", 60),
+        _number("DRYING_TIME", 2), _text("MACHINE_PROGRAM", "3045_:_B Säule oben U10"),
+        _boolean("ROBOT", True), _text("ROBOT_PROGRAM", "PRG17 - 3045B SÄULE OBEN U10"),
+        _number("CLAMPING_FORCE", 3500),
+        *_profile("CLOSING_POSITION", (800, 600, 300, 190, 30, 0.5)),
+        *_profile("CLOSING_SPEED", (30, 70, 70, 20, 12, 12)),
+        *_profile("MOLD_PROTECTION_POSITION", (800, 250, 200, 190, 10, 0.5)),
+        *_profile("MOLD_PROTECTION_FORCE", (60, 60, 60, 30, 25, 30)),
+        _number("MOLD_PROTECTION_STROKE", 130), _number("MOLD_PROTECTION_TIME", 3),
+        _number("HIGH_SPEED_LOCKING", 0.5),
+        *_profile("OPENING_POSITION", (800, 600, 220, 190, 150, 0)),
+        *_profile("OPENING_SPEED", (30, 70, 70, 45, 15, 15)),
+        _number("OPENING_STROKE", 800), _number("EJECTOR_START_POSITION", 88),
+        _number("EJECTOR_CONTROLLED_POSITION", 205), _number("EJECTOR_REAL_STROKE", 117),
+        _number("EJECTOR_PRIORITY_OUT", 1), _number("EJECTOR_PRIORITY_IN", 1),
+        _number("EJECTOR_SPEED_OUT", 45, "1"), _number("EJECTOR_SPEED_IN", 40, "1"),
+        _number("EJECTOR_PRESSURE_OUT", 35, "1"), _number("EJECTOR_PRESSURE_IN", 20, "1"),
+        _number("MOLD_TEMPERATURE", 35, "MOVING"), _number("MOLD_TEMPERATURE", 35, "FIXED"),
+        _text("MOLD_COOLING", "Studená voda", "MOVING"),
+        _text("MOLD_COOLING", "Studená voda", "FIXED"),
+        _number("HOT_RUNNER_TEMPERATURE", 225, "1"),
+        _number("HOT_RUNNER_TEMPERATURE", 225, "2"),
+        _number("HOT_RUNNER_TEMPERATURE", 225, "3"),
+        _number("BARREL_TEMPERATURE", 245, "NOZZLE"),
+        _number("BARREL_TEMPERATURE", 240, "1"), _number("BARREL_TEMPERATURE", 235, "2"),
+        _number("BARREL_TEMPERATURE", 225, "3"), _number("BARREL_TEMPERATURE", 215, "4"),
+        _number("BARREL_TEMPERATURE", 205, "5"), _number("BARREL_TEMPERATURE", 70, "HOPPER"),
+        _boolean("BOOSTING_PRESSURE", False), _number("INJECTION_SPEED", 30, "1"),
+        _number("MAX_INJECTION_PRESSURE", 100), _number("TRANSFER_PRESSURE", 56.1),
+        _number("PEAK_PRESSURE", 56.1), _number("TRANSFER_POSITION", 30),
+        _number("CUSHION", 19.5), _number("HOLDING_TIME_PROFILE", 7, "1"),
+        _number("HOLDING_PRESSURE", 20, "1"), _number("DOSING_STROKE", 125),
+        _number("DECOMP_AFTER", 5), _number("DECOMP_SPEED", 5),
+        _number("DOSING_SPEED", 80, "1"), _number("DOSING_TIME", 10.7),
+        _number("BACK_PRESSURE", 10, "1"), _number("INJECTION_TIME", 3.48),
+        _number("HOLDING_TIME", 7), _number("COOLING_TIME", 14.5), _number("CYCLE_TIME", 41),
+        _number("CUSHION_TOLERANCE", 19.5, minimum=14.5, maximum=21.5),
+        _number("INJECTION_TIME_TOLERANCE", 3.48, minimum=3.2, maximum=3.8),
+        _number("DOSING_TIME_LIMIT", 14.4), _number("SHOT_WEIGHT", 455.07),
+        _number("SPRUE_WEIGHT", 20.67), _number("STARTUP_PIECES", 1),
+        _text("SPECIAL_NOTE", "UZAV. TRYSKA: HYDRAULICKY\nPohyblivá strana: studená voda"),
+    ],
+}

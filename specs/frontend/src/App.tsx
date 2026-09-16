@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api, issuePdf, setSession } from './api';
-import type { Definition, MesItem, Parameter, Revision, Spec, Template, User } from './types';
+import type { Definition, MesItem, Parameter, ProcessTemplate, Revision, Spec, Template, User } from './types';
 
 type DraftRow = {
   key: string; definition_id: number; position_key: string; position_label: string;
@@ -55,11 +55,15 @@ export default function App() {
   const [definitions, setDefinitions] = useState<Definition[]>([]);
   const [machines, setMachines] = useState<MesItem[]>([]);
   const [tools, setTools] = useState<MesItem[]>([]);
+  const [processTemplates, setProcessTemplates] = useState<ProcessTemplate[]>([]);
   const [mesMode, setMesMode] = useState('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [selectedRevisionId, setSelectedRevisionId] = useState<number | null>(null);
   const [machineRef, setMachineRef] = useState('');
   const [toolRef, setToolRef] = useState('');
+  const [processTemplateId, setProcessTemplateId] = useState('');
+  const [newTemplateName, setNewTemplateName] = useState('');
+  const [newTemplateDescription, setNewTemplateDescription] = useState('');
   const [draft, setDraft] = useState<Draft | null>(null);
   const [returnReason, setReturnReason] = useState('');
   const [audit, setAudit] = useState<Audit[]>([]);
@@ -82,8 +86,12 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
-    Promise.all([api<Spec[]>('/specs'), api<Definition[]>('/parameter-definitions')])
-      .then(([allSpecs, defs]) => { setSpecs(allSpecs); setDefinitions(defs); })
+    Promise.all([api<Spec[]>('/specs'), api<Definition[]>('/parameter-definitions'),
+                 api<ProcessTemplate[]>('/process-templates')])
+      .then(([allSpecs, defs, templates]) => {
+        setSpecs(allSpecs); setDefinitions(defs); setProcessTemplates(templates);
+        setProcessTemplateId(current => current || String(templates[0]?.id ?? ''));
+      })
       .catch(e => setError(e.message));
     Promise.all([api<{ mode: string; items: MesItem[] }>('/mes/machines'),
                  api<{ mode: string; items: MesItem[] }>('/mes/tools')])
@@ -137,10 +145,24 @@ export default function App() {
   async function createSpec(event: React.FormEvent) {
     event.preventDefault();
     await action(async () => {
-      const created = await api<Spec>('/specs', 'POST', { machine_ref: machineRef, tool_ref: toolRef });
+      const created = await api<Spec>('/specs', 'POST', {
+        machine_ref: machineRef, tool_ref: toolRef, template_id: Number(processTemplateId),
+      });
       await reload(); setSelectedId(created.id); setSelectedRevisionId(created.revisions[0].id);
       setMachineRef(''); setToolRef('');
     }, 'Nový předpis a první rozpracovaná revize jsou připravené.');
+  }
+
+  async function saveAsProcessTemplate() {
+    if (!activeRevision || !newTemplateName.trim()) return;
+    await action(async () => {
+      await api('/process-templates', 'POST', {
+        revision_id: activeRevision.id, name: newTemplateName,
+        description: newTemplateDescription,
+      });
+      const templates = await api<ProcessTemplate[]>('/process-templates');
+      setProcessTemplates(templates); setNewTemplateName(''); setNewTemplateDescription('');
+    }, 'Schválená revize byla uložena jako výchozí vzor pro nové návodky.');
   }
 
   function updateRow(key: string, patch: Partial<DraftRow>) {
@@ -270,7 +292,12 @@ export default function App() {
           <label>Forma / nástroj<select value={toolRef} onChange={e => setToolRef(e.target.value)} required>
             <option value="">Vyber formu</option>{tools.map(t => <option key={t.ref} value={t.ref}>{t.code} · {t.name}</option>)}
           </select></label>
-          <button className="primary full" disabled={busy || !machines.length || !tools.length}>+ Založit draft</button>
+          <label className="template-choice">Výchozí vzor<select value={processTemplateId} onChange={e => setProcessTemplateId(e.target.value)} required>
+            <option value="">Vyber vzor</option>{processTemplates.map(item => <option key={item.id} value={item.id}>
+              {item.is_system ? 'Systémový' : 'Vlastní'} · {item.name} · {item.parameter_count} hodnot
+            </option>)}
+          </select><small>{processTemplates.find(item => String(item.id) === processTemplateId)?.description}</small></label>
+          <button className="primary full" disabled={busy || !machineRef || !toolRef || !processTemplateId}>+ Založit draft ze vzoru</button>
         </form>}
       </aside>
 
@@ -373,6 +400,14 @@ export default function App() {
                   <strong>{p.definition_type === 'TEXT' ? p.text_value : p.definition_type === 'BOOLEAN' ? (p.boolean_value ? 'Ano' : 'Ne') : `${shownNumber(p.numeric_target)} ${p.unit}`}</strong>
                   <span>{shownNumber(p.numeric_min)}</span><span>{shownNumber(p.numeric_max)}</span></div>)}
               </div>
+              {activeRevision.status === 'APPROVED' && activeRevision.id === selectedSpec.current_approved_revision_id &&
+                (user.role === 'ENGINEER' || user.role === 'ADMIN') && <div className="save-template">
+                  <div><span className="eyebrow">Výchozí vzor</span><b>Uložit tuto schválenou revizi pro nové nástroje</b>
+                    <small>Vznikne neměnná kopie hodnot a tolerancí. Pozdější revize původního předpisu ji nezmění.</small></div>
+                  <label>Název vzoru<input value={newTemplateName} onChange={e => setNewTemplateName(e.target.value)} placeholder="Např. ENGEL 900 · podobné formy" /></label>
+                  <label>Popis<input value={newTemplateDescription} onChange={e => setNewTemplateDescription(e.target.value)} placeholder="Kdy tento vzor použít" /></label>
+                  <button className="secondary" disabled={busy || newTemplateName.trim().length < 3} onClick={saveAsProcessTemplate}>Uložit jako vzor</button>
+                </div>}
               {activeRevision.status === 'IN_REVIEW' && (user.role === 'APPROVER' || user.role === 'ADMIN') &&
                 <div className="review-actions"><button className="primary" disabled={busy} onClick={() => review(true)}>✓ Schválit revizi</button>
                   <input value={returnReason} onChange={e => setReturnReason(e.target.value)} placeholder="Důvod vrácení" />

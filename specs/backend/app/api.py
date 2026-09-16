@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from .database import get_db
 from .catalog import BY_CODE
 from .mes import MesCatalog, MesUnavailable
-from .models import Assignment, AuditEntry, ParameterDefinition, ParameterValue, PdfDocument, PdfTemplate, Revision, Spec, User, utc_now
+from .models import Assignment, AuditEntry, ParameterDefinition, ParameterValue, PdfDocument, PdfTemplate, ProcessTemplate, Revision, Spec, User, utc_now
 from .pdf import generate_pdf
 from .security import administrator, approver, current_user, verify_password, writer
 
@@ -32,6 +32,7 @@ class LoginInput(BaseModel):
 class CreateSpecInput(BaseModel):
     machine_ref: str = Field(min_length=1)
     tool_ref: str = Field(min_length=1)
+    template_id: int | None = None
 
 
 class ParameterInput(BaseModel):
@@ -68,6 +69,12 @@ class TemplateInput(BaseModel):
     accent_color: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
     section_color: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
     show_english_subtitle: bool = True
+
+
+class ProcessTemplateInput(BaseModel):
+    revision_id: int
+    name: str = Field(min_length=3, max_length=255)
+    description: str = Field(default="", max_length=1000)
 
 
 def fail(status: int, message: str) -> None:
@@ -138,6 +145,59 @@ def revision_data(revision: Revision) -> dict:
     }
 
 
+def process_template_data(template: ProcessTemplate) -> dict:
+    return {
+        "id": template.id, "name": template.name, "description": template.description,
+        "source_revision_id": template.source_revision_id, "is_system": template.is_system,
+        "parameter_count": len(template.payload.get("parameters", [])),
+    }
+
+
+def template_payload_from_revision(revision: Revision) -> dict:
+    parameters = []
+    for item in revision.parameters:
+        parameters.append({
+            "definition_code": item.definition_code, "position_key": item.position_key,
+            "position_label": item.position_label,
+            "numeric_target": str(item.numeric_target) if item.numeric_target is not None else None,
+            "numeric_min": str(item.numeric_min) if item.numeric_min is not None else None,
+            "numeric_max": str(item.numeric_max) if item.numeric_max is not None else None,
+            "text_value": item.text_value, "boolean_value": item.boolean_value,
+            "note": item.note,
+        })
+    return {"product_name": revision.product_name, "material_name": revision.material_name,
+            "process_note": revision.process_note, "parameters": parameters}
+
+
+def apply_process_template(db: Session, revision: Revision, template: ProcessTemplate) -> None:
+    payload = template.payload or {}
+    revision.product_name = str(payload.get("product_name") or "")
+    revision.material_name = str(payload.get("material_name") or "")
+    revision.process_note = str(payload.get("process_note") or "")
+    revision.change_reason = f"Založeno ze vzoru: {template.name}"
+    definitions = {item.code: item for item in db.scalars(
+        select(ParameterDefinition).where(ParameterDefinition.is_active.is_(True))).all()}
+    seen = set()
+    for sort_order, item in enumerate(payload.get("parameters", []), start=1):
+        definition = definitions.get(item.get("definition_code"))
+        if not definition:
+            continue
+        position_key = str(item.get("position_key") or "")
+        key = (definition.id, position_key)
+        if key in seen:
+            continue
+        seen.add(key)
+        db.add(ParameterValue(
+            revision_id=revision.id, definition_id=definition.id,
+            position_key=position_key, position_label=str(item.get("position_label") or ""),
+            sort_order=sort_order, numeric_target=item.get("numeric_target"),
+            numeric_min=item.get("numeric_min"), numeric_max=item.get("numeric_max"),
+            text_value=item.get("text_value"), boolean_value=item.get("boolean_value"),
+            note=str(item.get("note") or ""), unit=definition.unit,
+            definition_code=definition.code, definition_name=definition.name,
+            definition_category=definition.category, definition_type=definition.value_type))
+
+
 def spec_data(db: Session, spec: Spec) -> dict:
     revisions = db.scalars(select(Revision).where(Revision.process_spec_id == spec.id).order_by(Revision.revision_number.desc())).all()
     assignment = spec.assignment
@@ -203,6 +263,39 @@ def definitions(db: Session = Depends(get_db), _: User = Depends(current_user)):
              if item.code in BY_CODE else []} for item in rows]
 
 
+@router.get("/process-templates")
+def process_templates(db: Session = Depends(get_db), _: User = Depends(current_user)):
+    rows = db.scalars(select(ProcessTemplate).where(ProcessTemplate.is_active.is_(True))
+                      .order_by(ProcessTemplate.is_system.desc(), ProcessTemplate.name)).all()
+    return [process_template_data(item) for item in rows]
+
+
+@router.post("/process-templates", status_code=201)
+def create_process_template(data: ProcessTemplateInput, db: Session = Depends(get_db),
+                            user: User = Depends(writer)):
+    revision = get_revision(db, data.revision_id)
+    spec = db.get(Spec, revision.process_spec_id)
+    if revision.status != "APPROVED" or spec.current_approved_revision_id != revision.id:
+        fail(409, "Vzor lze vytvořit pouze z aktuální schválené revize.")
+    name = data.name.strip()
+    if db.scalar(select(ProcessTemplate).where(ProcessTemplate.name == name)):
+        fail(409, "Vzor s tímto názvem už existuje.")
+    template = ProcessTemplate(name=name, description=data.description.strip(),
+                               source_revision_id=revision.id,
+                               payload=template_payload_from_revision(revision),
+                               is_system=False, is_active=True, created_by=user.id)
+    db.add(template)
+    try:
+        db.flush()
+        audit(db, user, "process_template", template.id, "created",
+              after={"name": template.name, "source_revision_id": revision.id})
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        fail(409, "Vzor s tímto názvem už existuje.")
+    return process_template_data(template)
+
+
 @router.get("/specs")
 def list_specs(db: Session = Depends(get_db), _: User = Depends(current_user)):
     specs = db.scalars(select(Spec).order_by(Spec.id.desc()).limit(100)).all()
@@ -229,7 +322,18 @@ def create_spec(data: CreateSpecInput, db: Session = Depends(get_db), user: User
     revision = Revision(process_spec_id=spec.id, revision_number=1, status="DRAFT", created_by=user.id)
     db.add(revision)
     db.flush()
-    audit(db, user, "process_spec", spec.id, "created", after={"machine_ref": data.machine_ref, "tool_ref": data.tool_ref})
+    template = None
+    if data.template_id is not None:
+        template = db.scalar(select(ProcessTemplate).where(ProcessTemplate.id == data.template_id,
+                                                           ProcessTemplate.is_active.is_(True)))
+        if not template:
+            fail(422, "Vybraný výchozí vzor neexistuje nebo není aktivní.")
+        apply_process_template(db, revision, template)
+        db.flush()
+    audit(db, user, "process_spec", spec.id, "created",
+          after={"machine_ref": data.machine_ref, "tool_ref": data.tool_ref,
+                 "template_id": template.id if template else None,
+                 "template_name": template.name if template else None})
     try:
         db.commit()
     except IntegrityError:

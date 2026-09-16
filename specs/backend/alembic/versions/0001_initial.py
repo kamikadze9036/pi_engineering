@@ -16,7 +16,8 @@ depends_on = None
 
 def upgrade():
     bind = op.get_bind()
-    initial_tables = [table for table in Base.metadata.sorted_tables if table.name != "pdf_templates"]
+    initial_tables = [table for table in Base.metadata.sorted_tables
+                      if table.name not in {"pdf_templates", "process_templates"}]
     Base.metadata.create_all(bind=bind, tables=initial_tables)
     if bind.dialect.name == "postgresql":
         op.execute("""
@@ -71,5 +72,6 @@ def downgrade():
             op.execute(f"DROP TRIGGER IF EXISTS {trigger} ON {table}")
         for function in ("specs_guard_current", "specs_guard_audit", "specs_guard_approved"):
             op.execute(f"DROP FUNCTION IF EXISTS {function}()")
-    initial_tables = [table for table in Base.metadata.sorted_tables if table.name != "pdf_templates"]
+    initial_tables = [table for table in Base.metadata.sorted_tables
+                      if table.name not in {"pdf_templates", "process_templates"}]
     Base.metadata.drop_all(bind=bind, tables=initial_tables)

@@ -29,3 +29,7 @@ export type Spec = {
 export type Template = { version: string; title: string; settings: {
   accent_color: string; section_color: string; show_english_subtitle: boolean;
 } };
+export type ProcessTemplate = {
+  id: number; name: string; description: string; source_revision_id: number | null;
+  is_system: boolean; parameter_count: number;
+};

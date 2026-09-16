@@ -20,7 +20,7 @@ Otevřít `http://localhost:8081`. V testovacím režimu (`SPECS_DEMO_MODE=true`
 | `schvalovatel` | APPROVER | hodnota `SPECS_DEMO_PASSWORD` |
 | `admin` | ADMIN | hodnota `SPECS_ADMIN_PASSWORD` |
 
-Test: přihlásit se jako `inzenyr`, založit kombinaci a projít formulář po sekcích shodných s návodkou. Prázdná pole lze nechat prázdná; do revize se ukládají jen vyplněné hodnoty a dvě přepínací pole. Doplnit výrobek, důvod a několik profilů/teplot, uložit draft a odeslat. Přihlásit se jako `schvalovatel`, schválit revizi a použít **Vydat / otevřít PDF**. Pak lze založit novou revizi kopií platné. Admin může publikovat další verzi vzhledu PDF (nadpis, barvy, anglické podnadpisy); již vydané PDF zůstává archivované.
+Test: přihlásit se jako `inzenyr`, vybrat stroj, formu a výchozí vzor. Součástí instalace je prázdná ENGEL návodka a referenční U10/3045 s hodnotami z dodaného PDF. Nový draft dostane hodnoty, pozice i tolerance ze vzoru; formulář pak lze upravit po sekcích. Prázdná pole lze nechat prázdná. Doplnit důvod a změny, uložit draft a odeslat. Přihlásit se jako `schvalovatel`, schválit revizi a použít **Vydat / otevřít PDF**. Aktuální schválenou revizi může inženýr nebo administrátor uložit pod vlastním názvem jako další neměnný vzor pro nové nástroje. Nová revize stejného předpisu dál vzniká kopií platné revize. Admin může publikovat další verzi vzhledu PDF; již vydané PDF zůstává archivované.
 
 Data jsou ve volumes `specs_pgdata` a `specs_pdf`. Běžné `docker compose down` je nesmaže. Nepoužívat `down -v`, pokud má historie zůstat zachovaná.
 
@@ -37,6 +37,7 @@ Data jsou ve volumes `specs_pgdata` a `specs_pdf`. Běžné `docker compose down
 
 - Vnitřní API není publikované samostatným portem; Nginx obsluhuje UI a proxy `/api/v1` na backend. Pro provoz mimo lokální test použít firemní HTTPS/reverse proxy a `SPECS_COOKIE_SECURE=true`.
 - `specs-init` při startu provede verzované migrace Alembic a idempotentní založení první administrace/katalogu. Změny schématu se přidávají jako další migrace, nikoli přepisem historických revizí.
+- Výchozí procesní vzory jsou neměnné snapshoty. Dva systémové vzory vytváří seed; další vzniknou pouze z aktuální schválené revize a zobrazí se ve výběru při založení nového předpisu.
 - PDF při prvním vydání uloží soubor, verzi šablony a SHA-256 do databáze; další otevření používá přesně tentýž soubor. Zálohovat **PostgreSQL i PDF volume** společně.
 - Admin editor vzhledu v MVP ovládá základní styl. Pro budoucí úplnou úpravu rozložení je připravená verzovaná tabulka `pdf_templates.settings`; po rozboru dalších návodek lze doplnit editaci sekcí, polí, loga a šablon podle typu stroje.
 
