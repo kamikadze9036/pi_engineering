@@ -192,6 +192,12 @@ export default function App() {
     setDraft(old => old && { ...old, rows: old.rows.map(r => r.definition_id === definitionId ? { ...r, unit } : r) });
   }
 
+  function discardDraft() {
+    if (!activeRevision) return;
+    setDraft(toDraft(activeRevision, definitions));
+    setMessage('Rozpracované změny zahozeny, formulář je zpět na naposledy uložené verzi.'); setError('');
+  }
+
   async function saveDraft() {
     if (!draft || !activeRevision) return;
     await action(async () => {
@@ -419,6 +425,7 @@ export default function App() {
                 })}
               </div>
               <div className="editor-actions"><button className="primary" disabled={busy} onClick={saveDraft}>Uložit draft</button>
+                <button className="ghost" disabled={busy} onClick={discardDraft}>↺ Zahodit změny</button>
                 <button className="secondary" disabled={busy || !activeRevision} onClick={previewRevision}>↗ Náhled PDF</button>
                 <button className="secondary" disabled={busy} onClick={issueRevision}>✓ Vydat</button>
                 <small>Nejdřív ulož změny. Vydání používá naposledy uloženou verzi a rovnou zveřejní platnou revizi.</small></div>
