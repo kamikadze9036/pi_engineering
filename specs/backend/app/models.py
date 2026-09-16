@@ -187,6 +187,15 @@ class BugReport(Base):
     __table_args__ = (CheckConstraint("status IN ('OPEN','DONE')", name="bug_report_status"),)
 
 
+class Material(Base):
+    __tablename__ = "materials"
+    id: Mapped[int] = mapped_column(ID, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), unique=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class ProcessTemplate(Base):
     """Immutable starting point for a new tool/process specification."""
     __tablename__ = "process_templates"

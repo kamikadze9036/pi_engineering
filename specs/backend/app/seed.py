@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from .catalog import DEFINITIONS, REFERENCE_U10_3045
 from .database import SessionLocal
-from .models import ParameterDefinition, PdfTemplate, ProcessTemplate, User
+from .models import Material, ParameterDefinition, PdfTemplate, ProcessTemplate, User
 from .security import hash_password, verify_password
 
 
@@ -74,6 +74,9 @@ def run() -> None:
             if not db.scalar(select(ProcessTemplate).where(ProcessTemplate.name == name)):
                 db.add(ProcessTemplate(name=name, description=description, payload=payload,
                                        is_system=True, is_active=True, created_by=admin.id))
+        seed_material = "Finalloy SMV-66 HM black (SAP: PPM0254)"
+        if not db.scalar(select(Material).where(Material.name == seed_material)):
+            db.add(Material(name=seed_material, is_active=True, created_by=admin.id))
 
 
 if __name__ == "__main__":

@@ -193,8 +193,12 @@ def draw_header(sheet: Sheet, revision: Revision, values: SheetValues) -> float:
         sheet.labelled_cell(cursor, y, cell_w, 28, cz, en, value, unit[0] if unit else "")
         cursor += cell_w
     y -= 28
+    material_text = values.raw("RAW_MATERIAL", blank=revision.material_name or "·")
+    colorant = values.raw("COLORANT", blank="")
+    if colorant:
+        material_text = f"{material_text} · barvivo: {colorant}"
     cells = [
-        (260, "Vstupní materiál", "Raw material", values.raw("RAW_MATERIAL", blank=revision.material_name or "·")),
+        (260, "Vstupní materiál", "Raw material", material_text),
         (92, "Recyklovaný materiál", "Regrind material", values.raw("REGRIND_PERCENT"), "%"),
         (132, "Teplota sušení", "Drying temperature", values.raw("DRYING_TEMPERATURE"), "°C ±10°C"),
         (100, "Čas", "Time", values.raw("DRYING_TIME"), "h"),
@@ -223,8 +227,8 @@ def draw_left(sheet: Sheet, revision: Revision, values: SheetValues, y: float) -
     y = sheet.pair_row(x, y, width, 15, [("Uzavírací síla", "Clamping force", values.raw("CLAMPING_FORCE"), "kN")])
     y = sheet.sequence(x, y, width, 18, "Dráha zavírání formy", "Closing stroke", positions(values, "CLOSING_POSITION", range(1, 7)), "mm")
     y = sheet.sequence(x, y, width, 18, "Rychlost zavření", "Closing speed", positions(values, "CLOSING_SPEED", range(1, 7)), "%")
-    y = sheet.sequence(x, y, width, 18, "Dráha ochrany formy", "Mould protection stroke", positions(values, "MOLD_PROTECTION_POSITION", range(1, 7)), "mm")
-    y = sheet.sequence(x, y, width, 18, "Síla ochrany formy", "Mould protection force", positions(values, "MOLD_PROTECTION_FORCE", range(1, 7)), "%")
+    y = sheet.sequence(x, y, width, 18, "Dráha zavírání formy", "Mould protection stroke", positions(values, "MOLD_PROTECTION_POSITION", range(1, 7)), "mm")
+    y = sheet.sequence(x, y, width, 18, "Síla zavírání formy", "Mould protection force", positions(values, "MOLD_PROTECTION_FORCE", range(1, 7)), "%")
     y = sheet.pair_row(x, y, width, 17, [
         ("Dráha ochrany formy", "Mould protection stroke", values.raw("MOLD_PROTECTION_STROKE"), "mm"),
         ("Doba kontroly", "Protection time", values.raw("MOLD_PROTECTION_TIME"), "s"),

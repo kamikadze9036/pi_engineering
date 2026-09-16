@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api, issuePdf, previewPdf, setSession } from './api';
-import type { Definition, MesItem, Parameter, ProcessTemplate, Revision, Spec, Template, User } from './types';
+import type { Definition, Material, MesItem, Parameter, ProcessTemplate, Revision, Spec, Template, User } from './types';
 import { SearchableSelect, type SearchableOption } from './SearchableSelect';
 import { BugReportWidget } from './BugReportWidget';
 import { VisualSheetEditor } from './VisualSheetEditor';
+import { focusNextOnEnter, selectOnFocus, roundTo2 } from './inputBehaviors';
 
 type DraftRow = {
   key: string; definition_id: number; position_key: string; position_label: string;
@@ -59,6 +60,8 @@ export default function App() {
   const [machines, setMachines] = useState<MesItem[]>([]);
   const [tools, setTools] = useState<MesItem[]>([]);
   const [processTemplates, setProcessTemplates] = useState<ProcessTemplate[]>([]);
+  const [materials, setMaterials] = useState<Material[]>([]);
+  const [newMaterialName, setNewMaterialName] = useState('');
   const [mesMode, setMesMode] = useState('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [selectedRevisionId, setSelectedRevisionId] = useState<number | null>(null);
@@ -105,6 +108,7 @@ export default function App() {
     api<Template>('/pdf-templates/current').then(t => {
       setTemplate(t); setTemplateForm({ title: t.title, ...t.settings });
     }).catch(() => {});
+    api<Material[]>('/materials').then(setMaterials).catch(() => {});
   }, [user]);
 
   useEffect(() => {
@@ -124,6 +128,7 @@ export default function App() {
   const machineOptions = useMemo(() => mesOptions(machines), [machines]);
   const toolOptions = useMemo(() => mesOptions(tools), [tools]);
   const rowByKey = useMemo(() => new Map((draft?.rows ?? []).map(r => [r.key, r])), [draft]);
+  const materialNames = useMemo(() => materials.map(m => m.name), [materials]);
   const displayedRows = draft ? (viewMode === 'visual' ? draft.rows.filter(r => !r.key.startsWith('template-')) : draft.rows) : [];
 
   async function reload() {
@@ -274,6 +279,23 @@ export default function App() {
     }, 'Nová verze PDF šablony je aktivní pro další vydané dokumenty.');
   }
 
+  async function addMaterial(event: React.FormEvent) {
+    event.preventDefault();
+    if (!newMaterialName.trim()) return;
+    await action(async () => {
+      await api('/materials', 'POST', { name: newMaterialName.trim() });
+      setMaterials(await api<Material[]>('/materials'));
+      setNewMaterialName('');
+    }, 'Materiál je v nabídce pro Vstupní materiál.');
+  }
+
+  async function removeMaterial(id: number) {
+    await action(async () => {
+      await api(`/materials/${id}`, 'DELETE');
+      setMaterials(await api<Material[]>('/materials'));
+    }, 'Materiál byl odebrán z nabídky.');
+  }
+
   if (loading) return <div className="boot">Načítám předpisy…</div>;
   if (!user) return <main className="login-page">
     <div className="login-art"><span className="eyebrow">Procesní inženýrství</span>
@@ -383,7 +405,7 @@ export default function App() {
                 ? 'Rozložení sekcí i pořadí polí odpovídá firemní návodce. Jednotka jde u každého pole přepsat, pro jiné typy strojů.'
                 : 'Formulář obsahuje všechna pole z dodané návodky. Prázdné hodnoty se do revize neukládají, v PDF zůstanou jako prázdné buňky.'}</p>
               {viewMode === 'visual' && <VisualSheetEditor definitions={definitions} rowByKey={rowByKey}
-                updateRow={updateRow} updateUnit={updateUnit} />}
+                updateRow={updateRow} updateUnit={updateUnit} materials={materialNames} />}
               <div className="table-heading custom-heading"><div><span className="eyebrow">{viewMode === 'visual' ? 'Mimo firemní návodku' : 'Všechna pole'}</span>
                 <h3>{viewMode === 'visual' ? 'Vlastní parametry' : 'Pole podle firemní návodky'}</h3></div>
                 <button className="secondary" onClick={addRow}>+ Vlastní parametr</button></div>
@@ -415,10 +437,16 @@ export default function App() {
                     {definition?.value_type === 'TEXT' ? <label>Textová hodnota<input value={row.text_value} onChange={e => updateRow(row.key, { text_value: e.target.value })} /></label>
                       : definition?.value_type === 'BOOLEAN' ? <label className="checkbox"><input type="checkbox" checked={row.boolean_value} onChange={e => updateRow(row.key, { boolean_value: e.target.checked })} /> Ano</label>
                       : <div className="value-grid">
-                        <label>Cíl<input type="number" step="any" value={row.numeric_target} onChange={e => updateRow(row.key, { numeric_target: e.target.value })} /></label>
-                        <label>Minimum<input type="number" step="any" value={row.numeric_min} onChange={e => updateRow(row.key, { numeric_min: e.target.value })} /></label>
-                        <label>Maximum<input type="number" step="any" value={row.numeric_max} onChange={e => updateRow(row.key, { numeric_max: e.target.value })} /></label>
-                        <span className="unit">{definition?.unit || ''}</span>
+                        <label>Cíl<input type="number" step="any" value={row.numeric_target} onFocus={selectOnFocus} onKeyDown={focusNextOnEnter}
+                          onChange={e => updateRow(row.key, { numeric_target: e.target.value })}
+                          onBlur={e => updateRow(row.key, { numeric_target: roundTo2(e.target.value) })} /></label>
+                        <label>Minimum<input type="number" step="any" value={row.numeric_min} onFocus={selectOnFocus} onKeyDown={focusNextOnEnter}
+                          onChange={e => updateRow(row.key, { numeric_min: e.target.value })}
+                          onBlur={e => updateRow(row.key, { numeric_min: roundTo2(e.target.value) })} /></label>
+                        <label>Maximum<input type="number" step="any" value={row.numeric_max} onFocus={selectOnFocus} onKeyDown={focusNextOnEnter}
+                          onChange={e => updateRow(row.key, { numeric_max: e.target.value })}
+                          onBlur={e => updateRow(row.key, { numeric_max: roundTo2(e.target.value) })} /></label>
+                        <span className="unit">{row.unit || definition?.unit || ''}</span>
                       </div>}
                     {!isTemplate && <label className="note-label">Poznámka k hodnotě<input value={row.note} onChange={e => updateRow(row.key, { note: e.target.value })} /></label>}
                   </div></Fragment>;
@@ -470,6 +498,20 @@ export default function App() {
               onChange={e => setTemplateForm({ ...templateForm, show_english_subtitle: e.target.checked })} /> Anglické podnadpisy</label>
             <button className="secondary" disabled={busy}>Publikovat novou verzi</button>
           </form>
+        </section>}
+
+        {user.role === 'ADMIN' && <section className="template-card">
+          <div><span className="eyebrow">Číselník</span><h2>Používané materiály <small>{materials.length}</small></h2>
+            <p>Nabídka v poli Vstupní materiál při vyplňování předpisu.</p></div>
+          <form onSubmit={addMaterial} className="material-form">
+            <input value={newMaterialName} onChange={e => setNewMaterialName(e.target.value)} placeholder="Např. Finalloy SMV-66 HM black" />
+            <button className="secondary" disabled={busy || !newMaterialName.trim()}>+ Přidat materiál</button>
+          </form>
+          <div className="material-list">
+            {materials.map(m => <span key={m.id} className="material-chip">{m.name}
+              <button type="button" onClick={() => removeMaterial(m.id)} title="Odebrat">×</button></span>)}
+            {!materials.length && <p className="muted tiny">Zatím žádné materiály.</p>}
+          </div>
         </section>}
       </main>
     </div>

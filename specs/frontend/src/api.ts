@@ -16,6 +16,7 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
     const detail = error.detail;
     throw new Error(typeof detail === 'string' ? detail : `Požadavek selhal (${response.status}).`);
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 

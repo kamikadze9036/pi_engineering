@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from .database import get_db
 from .catalog import BY_CODE
 from .mes import MesCatalog, MesUnavailable
-from .models import Assignment, AuditEntry, BugReport, ParameterDefinition, ParameterValue, PdfDocument, PdfTemplate, ProcessTemplate, Revision, Spec, User, utc_now
+from .models import Assignment, AuditEntry, BugReport, Material, ParameterDefinition, ParameterValue, PdfDocument, PdfTemplate, ProcessTemplate, Revision, Spec, User, utc_now
 from .pdf import generate_pdf
 from .security import administrator, approver, current_user, verify_password, writer
 
@@ -68,6 +68,10 @@ class BugReportInput(BaseModel):
 
 class BugReportStatusInput(BaseModel):
     status: str = Field(pattern=r"^(OPEN|DONE)$")
+
+
+class MaterialInput(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
 
 
 class ReturnInput(VersionInput):
@@ -708,3 +712,39 @@ def update_bug_report(report_id: int, data: BugReportStatusInput, db: Session = 
     audit(db, user, "bug_report", report.id, "status_changed", after={"status": data.status})
     db.commit()
     return bug_report_data(report)
+
+
+@router.get("/materials")
+def list_materials(db: Session = Depends(get_db), _: User = Depends(current_user)):
+    rows = db.scalars(select(Material).where(Material.is_active.is_(True)).order_by(Material.name)).all()
+    return [{"id": item.id, "name": item.name} for item in rows]
+
+
+@router.post("/materials", status_code=201)
+def create_material(data: MaterialInput, db: Session = Depends(get_db), user: User = Depends(administrator)):
+    name = data.name.strip()
+    existing = db.scalar(select(Material).where(Material.name == name))
+    if existing:
+        if not existing.is_active:
+            existing.is_active = True
+            db.commit()
+        else:
+            fail(409, "Materiál s tímto názvem už existuje.")
+        return {"id": existing.id, "name": existing.name}
+    material = Material(name=name, is_active=True, created_by=user.id)
+    db.add(material)
+    db.flush()
+    audit(db, user, "material", material.id, "created", after={"name": name})
+    db.commit()
+    return {"id": material.id, "name": material.name}
+
+
+@router.delete("/materials/{material_id}", status_code=204)
+def delete_material(material_id: int, db: Session = Depends(get_db), user: User = Depends(administrator)):
+    material = db.get(Material, material_id)
+    if not material:
+        fail(404, "Materiál neexistuje.")
+    material.is_active = False
+    audit(db, user, "material", material.id, "deactivated")
+    db.commit()
+    return Response(status_code=204)
