@@ -175,6 +175,18 @@ class PdfTemplate(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class BugReport(Base):
+    __tablename__ = "bug_reports"
+    id: Mapped[int] = mapped_column(ID, primary_key=True)
+    reporter_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    message: Mapped[str] = mapped_column(Text)
+    page: Mapped[str] = mapped_column(String(255), default="")
+    status: Mapped[str] = mapped_column(String(20), default="OPEN")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (CheckConstraint("status IN ('OPEN','DONE')", name="bug_report_status"),)
+
+
 class ProcessTemplate(Base):
     """Immutable starting point for a new tool/process specification."""
     __tablename__ = "process_templates"

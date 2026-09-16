@@ -19,6 +19,10 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
   return response.json() as Promise<T>;
 }
 
+export function previewPdf(revisionId: number): void {
+  window.open(`/api/v1/revisions/${revisionId}/pdf/preview`, '_blank', 'noopener');
+}
+
 export async function issuePdf(revisionId: number): Promise<void> {
   const response = await fetch(`/api/v1/revisions/${revisionId}/pdf/issue`, {
     method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-Token': csrf },

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from .database import get_db
 from .catalog import BY_CODE
 from .mes import MesCatalog, MesUnavailable
-from .models import Assignment, AuditEntry, ParameterDefinition, ParameterValue, PdfDocument, PdfTemplate, ProcessTemplate, Revision, Spec, User, utc_now
+from .models import Assignment, AuditEntry, BugReport, ParameterDefinition, ParameterValue, PdfDocument, PdfTemplate, ProcessTemplate, Revision, Spec, User, utc_now
 from .pdf import generate_pdf
 from .security import administrator, approver, current_user, verify_password, writer
 
@@ -58,6 +58,15 @@ class DraftInput(BaseModel):
 
 class VersionInput(BaseModel):
     row_version: int
+
+
+class BugReportInput(BaseModel):
+    message: str = Field(min_length=3, max_length=4000)
+    page: str = Field(default="", max_length=255)
+
+
+class BugReportStatusInput(BaseModel):
+    status: str = Field(pattern=r"^(OPEN|DONE)$")
 
 
 class ReturnInput(VersionInput):
@@ -469,6 +478,41 @@ def approve(revision_id: int, data: VersionInput, db: Session = Depends(get_db),
     return revision_data(revision)
 
 
+@router.post("/revisions/{revision_id}/issue")
+def issue(revision_id: int, data: VersionInput, db: Session = Depends(get_db), user: User = Depends(writer)):
+    """Engineer-direct path: submit (if needed) and approve in one step, no separate approver."""
+    revision = get_revision_locked(db, revision_id)
+    if revision.status not in ("DRAFT", "IN_REVIEW"):
+        fail(409, "Vydat lze jen rozpracovanou nebo odeslanou revizi.")
+    check_author(revision, user)
+    check_version(revision, data.row_version)
+    if not revision.product_name or not revision.change_reason or not revision.parameters:
+        fail(422, "Vyplňte výrobek, důvod revize a alespoň jeden parametr.")
+    spec = db.get(Spec, revision.process_spec_id)
+    if spec.lifecycle != "ACTIVE":
+        fail(409, "Zastaralý předpis nelze vydat.")
+    if revision.status == "DRAFT":
+        revision.status = "IN_REVIEW"
+        revision.submitted_at = utc_now()
+        revision.row_version += 1
+        audit(db, user, "process_spec_revision", revision.id, "submitted", after={"status": "IN_REVIEW"})
+    # The MES read happens before the PostgreSQL transaction commits. A stale or
+    # missing export therefore never publishes an unverified new revision.
+    machine = mes_item("machines", spec.assignment.mes_machine_ref)
+    tool = mes_item("tools", spec.assignment.mes_tool_ref)
+    revision.mes_machine_code, revision.mes_machine_name = machine["code"], machine["name"]
+    revision.mes_tool_code, revision.mes_tool_name = tool["code"], tool["name"]
+    revision.status = "APPROVED"
+    revision.approved_by = user.id
+    revision.approved_at = utc_now()
+    revision.row_version += 1
+    spec.current_approved_revision_id = revision.id
+    audit(db, user, "process_spec_revision", revision.id, "approved",
+          after={"status": revision.status, "revision_number": revision.revision_number, "issued_by": "ENGINEER"})
+    db.commit()
+    return revision_data(revision)
+
+
 @router.post("/specs/{spec_id}/revisions", status_code=201)
 def create_revision(spec_id: int, db: Session = Depends(get_db), user: User = Depends(writer)):
     spec = db.get(Spec, spec_id)
@@ -601,6 +645,22 @@ def revision_pdf(revision_id: int, db: Session = Depends(get_db), user: User = D
     return pdf_for_revision(revision_id, db, user)
 
 
+@router.get("/revisions/{revision_id}/pdf/preview")
+def revision_pdf_preview(revision_id: int, db: Session = Depends(get_db), user: User = Depends(writer)):
+    """On-the-fly PDF for a DRAFT/IN_REVIEW revision. Never archived, never counted as issued."""
+    revision = get_revision(db, revision_id)
+    if revision.status == "APPROVED":
+        return pdf_for_revision(revision_id, db, user)
+    template = db.scalar(select(PdfTemplate).where(PdfTemplate.is_active.is_(True)))
+    if not template:
+        fail(503, "PDF šablona není dostupná.")
+    author = db.get(User, revision.created_by)
+    content = generate_pdf(revision, template, f"{author.first_name} {author.last_name}", "NÁHLED – zatím nevydáno")
+    filename = f"nahled-spec-{revision.process_spec_id}-rev-{revision.revision_number}.pdf"
+    return Response(content, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{filename}"'})
+
+
 @router.post("/revisions/{revision_id}/pdf/issue")
 def issue_revision_pdf(revision_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
     return pdf_for_revision(revision_id, db, user, issue=True)
@@ -612,3 +672,38 @@ def current_pdf(spec_id: int, db: Session = Depends(get_db), user: User = Depend
     if not spec or spec.lifecycle != "ACTIVE" or not spec.current_approved_revision_id:
         fail(404, "Předpis nemá platnou schválenou revizi.")
     return pdf_for_revision(spec.current_approved_revision_id, db, user)
+
+
+def bug_report_data(item: BugReport) -> dict:
+    return {"id": item.id, "reporter_id": item.reporter_id, "message": item.message,
+            "page": item.page, "status": item.status, "created_at": item.created_at.isoformat(),
+            "resolved_at": item.resolved_at.isoformat() if item.resolved_at else None}
+
+
+@router.get("/bug-reports")
+def list_bug_reports(db: Session = Depends(get_db), _: User = Depends(current_user)):
+    rows = db.scalars(select(BugReport).order_by(BugReport.status.asc(), BugReport.created_at.desc())).all()
+    return [bug_report_data(item) for item in rows]
+
+
+@router.post("/bug-reports", status_code=201)
+def create_bug_report(data: BugReportInput, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    report = BugReport(reporter_id=user.id, message=data.message.strip(), page=data.page.strip())
+    db.add(report)
+    db.flush()
+    audit(db, user, "bug_report", report.id, "reported")
+    db.commit()
+    return bug_report_data(report)
+
+
+@router.patch("/bug-reports/{report_id}")
+def update_bug_report(report_id: int, data: BugReportStatusInput, db: Session = Depends(get_db),
+                      user: User = Depends(administrator)):
+    report = db.get(BugReport, report_id)
+    if not report:
+        fail(404, "Hlášení neexistuje.")
+    report.status = data.status
+    report.resolved_at = utc_now() if data.status == "DONE" else None
+    audit(db, user, "bug_report", report.id, "status_changed", after={"status": data.status})
+    db.commit()
+    return bug_report_data(report)

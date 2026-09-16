@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { api, issuePdf, setSession } from './api';
+import { api, issuePdf, previewPdf, setSession } from './api';
 import type { Definition, MesItem, Parameter, ProcessTemplate, Revision, Spec, Template, User } from './types';
+import { SearchableSelect, type SearchableOption } from './SearchableSelect';
+import { BugReportWidget } from './BugReportWidget';
 
 type DraftRow = {
   key: string; definition_id: number; position_key: string; position_label: string;
@@ -114,6 +116,11 @@ export default function App() {
 
   const categories = useMemo(() => Array.from(new Set(definitions.map(d => d.category))), [definitions]);
   const definitionById = useMemo(() => new Map(definitions.map(d => [d.id, d])), [definitions]);
+  const mesOptions = (items: MesItem[]): SearchableOption[] =>
+    items.map(item => ({ value: item.ref, label: `${item.code} · ${item.name}`,
+      search: `${item.code} ${item.name}`.toLowerCase() }));
+  const machineOptions = useMemo(() => mesOptions(machines), [machines]);
+  const toolOptions = useMemo(() => mesOptions(tools), [tools]);
 
   async function reload() {
     const result = await api<Spec[]>('/specs');
@@ -208,12 +215,18 @@ export default function App() {
     }, 'Draft byl uložen.');
   }
 
-  async function submit() {
+  async function issueRevision() {
     if (!activeRevision) return;
     await action(async () => {
-      await api(`/revisions/${activeRevision.id}/submit`, 'POST', { row_version: activeRevision.row_version });
+      await api(`/revisions/${activeRevision.id}/issue`, 'POST', { row_version: activeRevision.row_version });
+      await issuePdf(activeRevision.id);
       await reload();
-    }, 'Revize čeká na schválení.');
+    }, 'Revize je vydaná, platná a PDF se otevřelo.');
+  }
+
+  function previewRevision() {
+    if (!activeRevision) return;
+    previewPdf(activeRevision.id);
   }
 
   async function review(approve: boolean) {
@@ -286,12 +299,12 @@ export default function App() {
         </div>
         {(user.role === 'ENGINEER' || user.role === 'ADMIN') && <form className="new-spec" onSubmit={createSpec}>
           <span className="eyebrow">Nový předpis</span>
-          <label>Stroj<select value={machineRef} onChange={e => setMachineRef(e.target.value)} required>
-            <option value="">Vyber stroj</option>{machines.map(m => <option key={m.ref} value={m.ref}>{m.code} · {m.name}</option>)}
-          </select></label>
-          <label>Forma / nástroj<select value={toolRef} onChange={e => setToolRef(e.target.value)} required>
-            <option value="">Vyber formu</option>{tools.map(t => <option key={t.ref} value={t.ref}>{t.code} · {t.name}</option>)}
-          </select></label>
+          <label>Stroj <small className="muted tiny">({machines.length})</small>
+            <SearchableSelect options={machineOptions} value={machineRef} onChange={setMachineRef} placeholder="Vyber stroj" />
+          </label>
+          <label>Forma / nástroj <small className="muted tiny">({tools.length})</small>
+            <SearchableSelect options={toolOptions} value={toolRef} onChange={setToolRef} placeholder="Vyber formu" />
+          </label>
           <label className="template-choice">Výchozí vzor<select value={processTemplateId} onChange={e => setProcessTemplateId(e.target.value)} required>
             <option value="">Vyber vzor</option>{processTemplates.map(item => <option key={item.id} value={item.id}>
               {item.is_system ? 'Systémový' : 'Vlastní'} · {item.name} · {item.parameter_count} hodnot
@@ -387,8 +400,9 @@ export default function App() {
                 })}
               </div>
               <div className="editor-actions"><button className="primary" disabled={busy} onClick={saveDraft}>Uložit draft</button>
-                <button className="secondary" disabled={busy} onClick={submit}>Odeslat ke schválení</button>
-                <small>Nejdřív ulož změny. Odeslání používá naposledy uloženou verzi.</small></div>
+                <button className="secondary" disabled={busy || !activeRevision} onClick={previewRevision}>↗ Náhled PDF</button>
+                <button className="secondary" disabled={busy} onClick={issueRevision}>✓ Vydat</button>
+                <small>Nejdřív ulož změny. Vydání používá naposledy uloženou verzi a rovnou zveřejní platnou revizi.</small></div>
             </div> : <div className="read-only">
               <div className="read-facts"><div><small>Výrobek</small><b>{activeRevision.product_name || '—'}</b></div>
                 <div><small>Materiál</small><b>{activeRevision.material_name || '—'}</b></div>
@@ -433,5 +447,6 @@ export default function App() {
         </section>}
       </main>
     </div>
+    <BugReportWidget user={user} context={selectedSpec ? `Předpis #${selectedSpec.id}` : 'Přehled'} />
   </div>;
 }

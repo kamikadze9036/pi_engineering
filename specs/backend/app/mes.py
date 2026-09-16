@@ -44,7 +44,9 @@ class MesCatalog:
             raise ValueError(kind)
         items = self.load()[kind]
         needle = q.casefold().strip()
-        return [item for item in items if needle in (item["code"] + " " + item["name"]).casefold()][:50]
+        if not needle:
+            return items
+        return [item for item in items if needle in (item["code"] + " " + item["name"]).casefold()]
 
     def get(self, kind: str, ref: str) -> dict | None:
         return next((item for item in self.load()[kind] if item["ref"] == ref), None)

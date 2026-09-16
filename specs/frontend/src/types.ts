@@ -33,3 +33,7 @@ export type ProcessTemplate = {
   id: number; name: string; description: string; source_revision_id: number | null;
   is_system: boolean; parameter_count: number;
 };
+export type BugReport = {
+  id: number; reporter_id: number; message: string; page: string;
+  status: 'OPEN' | 'DONE'; created_at: string; resolved_at: string | null;
+};

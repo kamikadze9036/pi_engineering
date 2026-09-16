@@ -121,3 +121,89 @@ def test_end_to_end_revision_workflow(tmp_path, monkeypatch):
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
+
+
+def test_engineer_issues_directly_without_approver(tmp_path, monkeypatch):
+    monkeypatch.setenv("SPECS_PDF_STORAGE", str(tmp_path / "pdf"))
+    engine = create_engine("sqlite+pysqlite:///:memory:",
+                           connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory.begin() as db:
+        db.add(User(username="inzenyr", first_name="Eva", last_name="Inženýrka",
+                    email="e2@example.invalid", password_hash=hash_password("test-password-123"), role="ENGINEER"))
+        db.add(ParameterDefinition(code="CYCLE_TIME", name="Doba cyklu", category="Specifický časový limit",
+                                   value_type="NUMERIC", unit="s", position_kind="NONE", sort_order=1))
+        db.add(PdfTemplate(version="v1", title="OPERAČNÍ NÁVODKA",
+                           settings={"accent_color": "#153AA8", "section_color": "#E2E4E7",
+                                     "show_english_subtitle": True}, is_active=True, created_by=1))
+
+    def test_db():
+        with factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = test_db
+    try:
+        with TestClient(app) as engineer:
+            login = engineer.post("/api/v1/auth/login", json={"username": "inzenyr", "password": "test-password-123"})
+            csrf = {"X-CSRF-Token": login.json()["csrf"]}
+            created = engineer.post("/api/v1/specs", json={"machine_ref": "P-DEMO-01", "tool_ref": "MO-DEMO-01"}, headers=csrf)
+            revision_id = created.json()["revisions"][0]["id"]
+            saved = engineer.put(f"/api/v1/revisions/{revision_id}/draft", headers=csrf,
+                                 json={"row_version": 1, "product_name": "Testovací výrobek",
+                                       "change_reason": "První nastavení", "parameters": [
+                                           {"definition_id": 1, "numeric_target": "41"}]})
+            preview = engineer.get(f"/api/v1/revisions/{revision_id}/pdf/preview")
+            assert preview.status_code == 200 and preview.content.startswith(b"%PDF")
+            issued = engineer.post(f"/api/v1/revisions/{revision_id}/issue", headers=csrf,
+                                   json={"row_version": saved.json()["row_version"]})
+            assert issued.status_code == 200
+            assert issued.json()["status"] == "APPROVED"
+            assert issued.json()["approved_by"] == 1
+            pdf = engineer.post(f"/api/v1/revisions/{revision_id}/pdf/issue", headers=csrf)
+            assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_bug_report_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setenv("SPECS_PDF_STORAGE", str(tmp_path / "pdf"))
+    engine = create_engine("sqlite+pysqlite:///:memory:",
+                           connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory.begin() as db:
+        db.add_all([
+            User(username="inzenyr", first_name="Eva", last_name="Inženýrka",
+                 email="e3@example.invalid", password_hash=hash_password("test-password-123"), role="ENGINEER"),
+            User(username="admin", first_name="Anna", last_name="Administrátorka",
+                 email="a3@example.invalid", password_hash=hash_password("test-password-123"), role="ADMIN"),
+        ])
+
+    def test_db():
+        with factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = test_db
+    try:
+        with TestClient(app) as engineer:
+            login = engineer.post("/api/v1/auth/login", json={"username": "inzenyr", "password": "test-password-123"})
+            csrf = {"X-CSRF-Token": login.json()["csrf"]}
+            reported = engineer.post("/api/v1/bug-reports", headers=csrf,
+                                     json={"message": "Tlačítko Vydat nic neudělá na Firefoxu.", "page": "Předpis #1"})
+            assert reported.status_code == 201
+            assert reported.json()["status"] == "OPEN"
+            assert engineer.patch(f"/api/v1/bug-reports/{reported.json()['id']}", headers=csrf,
+                                  json={"status": "DONE"}).status_code == 403
+        with TestClient(app) as administrator:
+            login = administrator.post("/api/v1/auth/login", json={"username": "admin", "password": "test-password-123"})
+            csrf = {"X-CSRF-Token": login.json()["csrf"]}
+            listed = administrator.get("/api/v1/bug-reports")
+            assert listed.status_code == 200 and len(listed.json()) == 1
+            resolved = administrator.patch(f"/api/v1/bug-reports/{listed.json()[0]['id']}", headers=csrf,
+                                           json={"status": "DONE"})
+            assert resolved.status_code == 200 and resolved.json()["status"] == "DONE"
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()

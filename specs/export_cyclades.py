@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from scripts.sync_cyclades import MACHINES_QUERY, TOOLS_QUERY, sql_export
+from scripts.sync_cyclades import ALL_MACHINES_QUERY, ALL_TOOLS_QUERY, sql_export
 
 
 def normalize(rows: list[dict], kind: str) -> list[dict]:
@@ -35,8 +35,8 @@ def main():
     parser.add_argument("--ssh-target", default=os.getenv("CYCLEDES_SSH_TARGET", "spc-vm"))
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    machines = normalize(sql_export(args.ssh_target, MACHINES_QUERY), "machines")
-    tools = normalize(sql_export(args.ssh_target, TOOLS_QUERY), "tools")
+    machines = normalize(sql_export(args.ssh_target, ALL_MACHINES_QUERY), "machines")
+    tools = normalize(sql_export(args.ssh_target, ALL_TOOLS_QUERY), "tools")
     payload = {"generated_at": datetime.now(timezone.utc).isoformat(),
                "source": "SUIVPRO.dbo.MACHINE + SUIVPRO.dbo.LISTE_OUTILS",
                "machines": machines, "tools": tools}

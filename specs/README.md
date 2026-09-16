@@ -20,14 +20,16 @@ Otevřít `http://localhost:8081`. V testovacím režimu (`SPECS_DEMO_MODE=true`
 | `schvalovatel` | APPROVER | hodnota `SPECS_DEMO_PASSWORD` |
 | `admin` | ADMIN | hodnota `SPECS_ADMIN_PASSWORD` |
 
-Test: přihlásit se jako `inzenyr`, vybrat stroj, formu a výchozí vzor. Součástí instalace je prázdná ENGEL návodka a referenční U10/3045 s hodnotami z dodaného PDF. Nový draft dostane hodnoty, pozice i tolerance ze vzoru; formulář pak lze upravit po sekcích. Prázdná pole lze nechat prázdná. Doplnit důvod a změny, uložit draft a odeslat. Přihlásit se jako `schvalovatel`, schválit revizi a použít **Vydat / otevřít PDF**. Aktuální schválenou revizi může inženýr nebo administrátor uložit pod vlastním názvem jako další neměnný vzor pro nové nástroje. Nová revize stejného předpisu dál vzniká kopií platné revize. Admin může publikovat další verzi vzhledu PDF; již vydané PDF zůstává archivované.
+Test: přihlásit se jako `inzenyr`, vybrat stroj, formu (vyhledávací dropdown s filtrem) a výchozí vzor. Součástí instalace je prázdná ENGEL návodka a referenční U10/3045 s hodnotami z dodaného PDF. Nový draft dostane hodnoty, pozice i tolerance ze vzoru; formulář pak lze upravit po sekcích. Prázdná pole lze nechat prázdná. Doplnit důvod a změny, uložit draft, volitelně **Náhled PDF** a rovnou **✓ Vydat** — schvalovatel není v MVP potřeba, procesní inženýr (nebo admin) revizi rovnou schválí a vydá. Aktuální schválenou revizi může inženýr nebo administrátor uložit pod vlastním názvem jako další neměnný vzor pro nové nástroje. Nová revize stejného předpisu dál vzniká kopií platné revize. Admin může publikovat další verzi vzhledu PDF; již vydané PDF zůstává archivované. Role `APPROVER` a endpointy `/submit`, `/approve`, `/return` v API zůstávají zachované pro pozdější znovuzavedení schvalování, ale UI je nepoužívá.
+
+V pravém dolním rohu je plovoucí tlačítko 🐞 pro nahlášení chyby — text se uloží do tabulky `bug_reports` a je vidět v adminově účtu k pozdějšímu společnému řešení.
 
 Data jsou ve volumes `specs_pgdata` a `specs_pdf`. Běžné `docker compose down` je nesmaže. Nepoužívat `down -v`, pokud má historie zůstat zachovaná.
 
 ## Ubuntu a Cyklades po návratu do firemní sítě
 
 1. Na Ubuntu hostiteli zprovoznit stejný SSH alias `spc-vm` a oprávnění k Docker/sqlcmd na cílové VM jako pro současný `scripts/sync_cyclades.py`. Heslo do MES zůstává v `~/cyclades-db.env` na `spc-vm`.
-2. Z kořene repozitáře nejdřív spustit `python3 specs/export_cyclades.py --dry-run`. Poté `python3 specs/export_cyclades.py`; vznikne atomický soubor `specs/mes-export/catalog.json`.
+2. Z kořene repozitáře nejdřív spustit `python3 specs/export_cyclades.py --dry-run`. Poté `python3 specs/export_cyclades.py`; vznikne atomický soubor `specs/mes-export/catalog.json`. Export stahuje úplně všechny stroje a nástroje z `dbo.MACHINE` / `dbo.LISTE_OUTILS` (bez filtru na prefix `P%` / `MO%` — ten používá jen `scripts/sync_cyclades.py` pro ProcessLog). Číselníkové API (`/mes/machines`, `/mes/tools`) už výsledek neořezává na 50 položek; frontend na velký seznam používá filtrovací dropdown (`SearchableSelect`, stejný vzor jako `SearchableSelect` v `cmms-ts`).
 3. V `specs/.env` přepnout `SPECS_DEMO_MODE=false` a `SPECS_MES_CATALOG_PATH=/data/mes/catalog.json`, změnit všechna testovací hesla/secrets, potom `docker compose up --build -d` v `specs`. Pro první interní test lze nastavit `SPECS_BOOTSTRAP_TEST_USERS=true`; tím zůstanou aktivní oddělené účty `inzenyr` a `schvalovatel` i nad reálným MES číselníkem. Po založení skutečných uživatelů tuto volbu vypnout.
 4. Spouštět export periodicky na hostiteli (například denně). Aplikace odmítne zakládat/schvalovat nové revize, pokud je export starší než 36 hodin; již schválené hodnoty/PDF zůstávají čitelné.
 
