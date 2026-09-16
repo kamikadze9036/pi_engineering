@@ -28,7 +28,7 @@ Data jsou ve volumes `specs_pgdata` a `specs_pdf`. Běžné `docker compose down
 
 1. Na Ubuntu hostiteli zprovoznit stejný SSH alias `spc-vm` a oprávnění k Docker/sqlcmd na cílové VM jako pro současný `scripts/sync_cyclades.py`. Heslo do MES zůstává v `~/cyclades-db.env` na `spc-vm`.
 2. Z kořene repozitáře nejdřív spustit `python3 specs/export_cyclades.py --dry-run`. Poté `python3 specs/export_cyclades.py`; vznikne atomický soubor `specs/mes-export/catalog.json`.
-3. V `specs/.env` přepnout `SPECS_DEMO_MODE=false` a `SPECS_MES_CATALOG_PATH=/data/mes/catalog.json`, změnit všechna testovací hesla/secrets, potom `docker compose up --build -d` v `specs`.
+3. V `specs/.env` přepnout `SPECS_DEMO_MODE=false` a `SPECS_MES_CATALOG_PATH=/data/mes/catalog.json`, změnit všechna testovací hesla/secrets, potom `docker compose up --build -d` v `specs`. Pro první interní test lze nastavit `SPECS_BOOTSTRAP_TEST_USERS=true`; tím zůstanou aktivní oddělené účty `inzenyr` a `schvalovatel` i nad reálným MES číselníkem. Po založení skutečných uživatelů tuto volbu vypnout.
 4. Spouštět export periodicky na hostiteli (například denně). Aplikace odmítne zakládat/schvalovat nové revize, pokud je export starší než 36 hodin; již schválené hodnoty/PDF zůstávají čitelné.
 
 **Před převodem skutečných předpisů ověřit**, zda `MAC_REFMAC` a `OUT_REFOUT` jsou trvalé identifikátory MES a zda existuje zdroj platných kombinací stroj–forma. Aktuální export používá kódy, stejně jako ProcessLog; živé SQL schéma zatím nebylo možné ověřit bez firemní sítě. Nová databáze stroje ani formy ručně neudržuje.

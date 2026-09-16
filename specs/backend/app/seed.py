@@ -14,6 +14,7 @@ def run() -> None:
     if not admin_password or len(admin_password) < 12:
         raise RuntimeError("SPECS_ADMIN_PASSWORD musí mít alespoň 12 znaků.")
     demo = os.getenv("SPECS_DEMO_MODE", "false").lower() == "true"
+    bootstrap_test_users = os.getenv("SPECS_BOOTSTRAP_TEST_USERS", "false").lower() == "true"
     with SessionLocal.begin() as db:
         admin = db.scalar(select(User).where(User.username == "admin"))
         if not admin:
@@ -23,7 +24,7 @@ def run() -> None:
             db.flush()
         elif not verify_password(admin_password, admin.password_hash):
             admin.password_hash = hash_password(admin_password)
-        if demo:
+        if demo or bootstrap_test_users:
             demo_password = os.getenv("SPECS_DEMO_PASSWORD", "demo123456789")
             for username, first, role in (("inzenyr", "Inženýr", "ENGINEER"), ("schvalovatel", "Schvalovatel", "APPROVER")):
                 account = db.scalar(select(User).where(User.username == username))

@@ -24,6 +24,7 @@ services:
       SPECS_ADMIN_PASSWORD: ${SPECS_ADMIN_PASSWORD:?Set SPECS_ADMIN_PASSWORD in .env}
       SPECS_DEMO_PASSWORD: ${SPECS_DEMO_PASSWORD:-demo123456789}
       SPECS_DEMO_MODE: ${SPECS_DEMO_MODE:-true}
+      SPECS_BOOTSTRAP_TEST_USERS: ${SPECS_BOOTSTRAP_TEST_USERS:-false}
     depends_on:
       specs-db:
         condition: service_healthy
