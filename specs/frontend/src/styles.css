@@ -65,3 +65,30 @@ label span{color:#c35252}.checkbox{display:flex;align-items:center;gap:7px}.chec
 .bug-item-meta{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .bug-item-meta small{color:#8493a3;font-size:10px}
 .bug-item-meta button{font-size:10px;padding:4px 7px;min-height:0}
+
+.view-toggle{display:flex;gap:6px}
+.view-toggle .active{background:#173c8c;color:#fff;border-color:#173c8c}
+.custom-heading{margin-top:26px}
+.sheet{margin:4px 0 22px}
+.sheet-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;margin-top:12px}
+.sheet-section{border:1px solid #dfe6ed;border-radius:9px;overflow:hidden;margin-bottom:12px;background:#fff}
+.sheet-section h4{margin:0;background:#263f61;color:#fff;font-size:11px;font-weight:800;letter-spacing:.03em;text-transform:uppercase;padding:8px 11px}
+.sheet-header .sheet-fields{display:flex;flex-wrap:wrap;gap:8px;padding:11px}
+.sheet-header .sheet-field{min-width:150px;flex:1}
+.sheet-fields{display:flex;flex-direction:column;gap:8px;padding:10px}
+.sheet-field{border:1px solid #e6ebf1;border-radius:7px;padding:7px 9px;background:#fbfcfe}
+.sheet-field-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.sheet-field-head span{font-size:10.5px;font-weight:700;color:#33445a;line-height:1.25}
+.sheet-unit{width:52px;flex:0 0 auto;min-height:24px;padding:2px 5px;font-size:10px;text-align:center;color:#5a6b80;background:#eef2f7;border-color:#dbe2e9}
+.sheet-field-cells{display:flex;flex-wrap:wrap;gap:5px}
+.sheet-cell{display:flex;flex-direction:column;gap:2px;min-width:46px}
+.sheet-cell small{font-size:8.5px;color:#8697a8;text-align:center}
+.sheet-cell input{min-height:26px;padding:2px 5px;font-size:11px;text-align:center;width:100%}
+.sheet-cell.checkbox{flex-direction:row;align-items:center;gap:5px;min-width:0}
+.sheet-cell.checkbox input{width:15px;height:15px;min-height:0}
+.sheet-cell.tolerance{min-width:96px}
+.sheet-minmax{display:flex;gap:4px}
+.sheet-minmax input{width:44px}
+.sheet-field.note{grid-column:1/-1}
+.sheet-note-area{width:100%;border:1px solid #cbd5df;border-radius:6px;padding:6px 8px;font:inherit;font-size:11px;resize:vertical}
+@media(max-width:1150px){.sheet-grid{grid-template-columns:1fr}}

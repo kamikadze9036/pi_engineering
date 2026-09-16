@@ -45,6 +45,7 @@ class ParameterInput(BaseModel):
     text_value: str | None = None
     boolean_value: bool | None = None
     note: str = ""
+    unit: str | None = None
 
 
 class DraftInput(BaseModel):
@@ -400,7 +401,7 @@ def save_draft(revision_id: int, data: DraftInput, db: Session = Depends(get_db)
             position_key=position_key, position_label=item.position_label.strip(), sort_order=sort_order,
             numeric_target=item.numeric_target, numeric_min=item.numeric_min, numeric_max=item.numeric_max,
             text_value=item.text_value, boolean_value=item.boolean_value, note=item.note.strip(),
-            unit=definition.unit, definition_code=definition.code, definition_name=definition.name,
+            unit=(item.unit or "").strip() or definition.unit, definition_code=definition.code, definition_name=definition.name,
             definition_category=definition.category, definition_type=definition.value_type))
     for old in list(revision.parameters):
         db.delete(old)

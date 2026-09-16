@@ -3,11 +3,12 @@ import { api, issuePdf, previewPdf, setSession } from './api';
 import type { Definition, MesItem, Parameter, ProcessTemplate, Revision, Spec, Template, User } from './types';
 import { SearchableSelect, type SearchableOption } from './SearchableSelect';
 import { BugReportWidget } from './BugReportWidget';
+import { VisualSheetEditor } from './VisualSheetEditor';
 
 type DraftRow = {
   key: string; definition_id: number; position_key: string; position_label: string;
   numeric_target: string; numeric_min: string; numeric_max: string;
-  text_value: string; boolean_value: boolean; note: string;
+  text_value: string; boolean_value: boolean; note: string; unit: string;
 };
 type Draft = {
   product_name: string; material_name: string; process_note: string; change_reason: string;
@@ -23,12 +24,12 @@ const fromParameter = (p: Parameter, index: number): DraftRow => ({
   key: `${p.definition_id}-${p.position_key}-${index}`,
   definition_id: p.definition_id, position_key: p.position_key, position_label: p.position_label,
   numeric_target: p.numeric_target ?? '', numeric_min: p.numeric_min ?? '', numeric_max: p.numeric_max ?? '',
-  text_value: p.text_value ?? '', boolean_value: p.boolean_value ?? false, note: p.note ?? '',
+  text_value: p.text_value ?? '', boolean_value: p.boolean_value ?? false, note: p.note ?? '', unit: p.unit,
 });
 const emptyRow = (definition: Definition, position?: { key: string; label: string }): DraftRow => ({
   key: `template-${definition.id}-${position?.key ?? 'single'}`, definition_id: definition.id,
   position_key: position?.key ?? '', position_label: position?.label ?? '', numeric_target: '',
-  numeric_min: '', numeric_max: '', text_value: '', boolean_value: false, note: '',
+  numeric_min: '', numeric_max: '', text_value: '', boolean_value: false, note: '', unit: definition.unit,
 });
 const toDraft = (revision: Revision, definitions: Definition[]): Draft => {
   const existing = new Map(revision.parameters.map((parameter, index) =>
@@ -74,6 +75,7 @@ export default function App() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [viewMode, setViewMode] = useState<'visual' | 'table'>('visual');
 
   useEffect(() => {
     api<User>('/auth/me').then(current => { setUser(current); setSession(current); })
@@ -121,6 +123,8 @@ export default function App() {
       search: `${item.code} ${item.name}`.toLowerCase() }));
   const machineOptions = useMemo(() => mesOptions(machines), [machines]);
   const toolOptions = useMemo(() => mesOptions(tools), [tools]);
+  const rowByKey = useMemo(() => new Map((draft?.rows ?? []).map(r => [r.key, r])), [draft]);
+  const displayedRows = draft ? (viewMode === 'visual' ? draft.rows.filter(r => !r.key.startsWith('template-')) : draft.rows) : [];
 
   async function reload() {
     const result = await api<Spec[]>('/specs');
@@ -180,8 +184,12 @@ export default function App() {
     setDraft(old => old && { ...old, rows: [...old.rows, {
       key: crypto.randomUUID(), definition_id: 0, position_key: '', position_label: '',
       numeric_target: '', numeric_min: '', numeric_max: '', text_value: '',
-      boolean_value: false, note: '',
+      boolean_value: false, note: '', unit: '',
     }] });
+  }
+
+  function updateUnit(definitionId: number, unit: string) {
+    setDraft(old => old && { ...old, rows: old.rows.map(r => r.definition_id === definitionId ? { ...r, unit } : r) });
   }
 
   async function saveDraft() {
@@ -198,7 +206,7 @@ export default function App() {
         const definition = definitionById.get(r.definition_id)!;
         return {
           definition_id: r.definition_id, position_key: r.position_key,
-          position_label: r.position_label, note: r.note,
+          position_label: r.position_label, note: r.note, unit: r.unit || definition.unit,
           numeric_target: definition.value_type === 'NUMERIC' ? (r.numeric_target || null) : null,
           numeric_min: definition.value_type === 'NUMERIC' ? (r.numeric_min || null) : null,
           numeric_max: definition.value_type === 'NUMERIC' ? (r.numeric_max || null) : null,
@@ -361,21 +369,32 @@ export default function App() {
                 <label>Procesní poznámka<input value={draft.process_note} onChange={e => setDraft({ ...draft, process_note: e.target.value })} placeholder="Volitelná instrukce" /></label>
               </div>
               <div className="table-heading"><div><span className="eyebrow">Technologické hodnoty</span><h3>Pole podle firemní návodky</h3></div>
+                <div className="view-toggle">
+                  <button className={viewMode === 'visual' ? 'secondary active' : 'secondary'} onClick={() => setViewMode('visual')}>Vizuálně jako PDF</button>
+                  <button className={viewMode === 'table' ? 'secondary active' : 'secondary'} onClick={() => setViewMode('table')}>Tabulkou</button>
+                </div></div>
+              <p className="form-hint">{viewMode === 'visual'
+                ? 'Rozložení sekcí i pořadí polí odpovídá firemní návodce. Jednotka jde u každého pole přepsat, pro jiné typy strojů.'
+                : 'Formulář obsahuje všechna pole z dodané návodky. Prázdné hodnoty se do revize neukládají, v PDF zůstanou jako prázdné buňky.'}</p>
+              {viewMode === 'visual' && <VisualSheetEditor definitions={definitions} rowByKey={rowByKey}
+                updateRow={updateRow} updateUnit={updateUnit} />}
+              <div className="table-heading custom-heading"><div><span className="eyebrow">{viewMode === 'visual' ? 'Mimo firemní návodku' : 'Všechna pole'}</span>
+                <h3>{viewMode === 'visual' ? 'Vlastní parametry' : 'Pole podle firemní návodky'}</h3></div>
                 <button className="secondary" onClick={addRow}>+ Vlastní parametr</button></div>
-              <p className="form-hint">Formulář obsahuje všechna pole z dodané návodky. Prázdné hodnoty se do revize neukládají, v PDF zůstanou jako prázdné buňky.</p>
               <div className="parameter-rows">
-                {draft.rows.map((row, rowIndex) => {
+                {displayedRows.map((row, rowIndex) => {
                   const definition = definitionById.get(row.definition_id);
-                  const previous = rowIndex > 0 ? definitionById.get(draft.rows[rowIndex - 1].definition_id) : null;
+                  const previous = rowIndex > 0 ? definitionById.get(displayedRows[rowIndex - 1].definition_id) : null;
                   const isTemplate = row.key.startsWith('template-');
                   return <Fragment key={row.key}>
                     {definition && definition.category !== previous?.category && <div className="parameter-category">
-                      <span>{definition.category}</span><small>{draft.rows.filter(item => definitionById.get(item.definition_id)?.category === definition.category).length} polí</small>
+                      <span>{definition.category}</span><small>{displayedRows.filter(item => definitionById.get(item.definition_id)?.category === definition.category).length} polí</small>
                     </div>}
                     <div className={`parameter-row ${isTemplate ? 'template-row' : ''}`}>
                     <div className="row-top">{isTemplate && definition ? <div className="fixed-parameter"><b>{definition.name}</b>
                       <small>{row.position_label || row.position_key || 'jedna hodnota'}</small></div> : <label>Parametr<select value={row.definition_id || ''}
-                      onChange={e => updateRow(row.key, { definition_id: Number(e.target.value), position_key: '', position_label: '' })}>
+                      onChange={e => updateRow(row.key, { definition_id: Number(e.target.value), position_key: '', position_label: '',
+                        unit: definitionById.get(Number(e.target.value))?.unit ?? '' })}>
                       <option value="">Vyber parametr</option>
                       {categories.map(category => <optgroup key={category} label={category}>
                         {definitions.filter(d => d.category === category).map(d => <option key={d.id} value={d.id}>{d.name} ({d.unit || d.value_type})</option>)}

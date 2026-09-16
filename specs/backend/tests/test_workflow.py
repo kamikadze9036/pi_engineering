@@ -152,7 +152,8 @@ def test_engineer_issues_directly_without_approver(tmp_path, monkeypatch):
             saved = engineer.put(f"/api/v1/revisions/{revision_id}/draft", headers=csrf,
                                  json={"row_version": 1, "product_name": "Testovací výrobek",
                                        "change_reason": "První nastavení", "parameters": [
-                                           {"definition_id": 1, "numeric_target": "41"}]})
+                                           {"definition_id": 1, "numeric_target": "41", "unit": "min"}]})
+            assert saved.json()["parameters"][0]["unit"] == "min"
             preview = engineer.get(f"/api/v1/revisions/{revision_id}/pdf/preview")
             assert preview.status_code == 200 and preview.content.startswith(b"%PDF")
             issued = engineer.post(f"/api/v1/revisions/{revision_id}/issue", headers=csrf,
