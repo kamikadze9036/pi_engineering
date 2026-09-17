@@ -74,6 +74,10 @@ class MaterialInput(BaseModel):
     name: str = Field(min_length=1, max_length=255)
 
 
+class MaterialSyncInput(BaseModel):
+    names: list[str] = Field(default_factory=list)
+
+
 class ReturnInput(VersionInput):
     reason: str = Field(min_length=3)
 
@@ -748,3 +752,26 @@ def delete_material(material_id: int, db: Session = Depends(get_db), user: User 
     audit(db, user, "material", material.id, "deactivated")
     db.commit()
     return Response(status_code=204)
+
+
+@router.post("/materials/sync")
+def sync_materials(data: MaterialSyncInput, db: Session = Depends(get_db), user: User = Depends(administrator)):
+    """Additive sync from Cyklades GP_CONSOF (scripts/sync_materials.py). Never removes
+    materials the admin added by hand or that Cyklades no longer lists."""
+    existing = {item.name: item for item in db.scalars(select(Material)).all()}
+    added, reactivated = 0, 0
+    for raw_name in data.names:
+        name = raw_name.strip()
+        if not name:
+            continue
+        current = existing.get(name)
+        if not current:
+            db.add(Material(name=name, is_active=True, created_by=user.id))
+            existing[name] = None
+            added += 1
+        elif not current.is_active:
+            current.is_active = True
+            reactivated += 1
+    audit(db, user, "material", 0, "synced", after={"added": added, "reactivated": reactivated, "source_count": len(data.names)})
+    db.commit()
+    return {"added": added, "reactivated": reactivated}

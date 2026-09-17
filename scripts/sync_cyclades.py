@@ -18,14 +18,25 @@ TOOLS_QUERY = "SET NOCOUNT ON; SELECT OUT_REFOUT, OUT_LIBOUT, COALESCE(OUT_TYPEO
 # ref prefix (ProcessLog keeps using the P%/MO% queries above unchanged).
 ALL_MACHINES_QUERY = "SET NOCOUNT ON; SELECT MAC_REFMAC, MAC_LIBMAC, '' FROM dbo.MACHINE WHERE MAC_REFMAC IS NOT NULL AND MAC_REFMAC <> '' AND MAC_LIBMAC IS NOT NULL ORDER BY MAC_REFMAC;"
 ALL_TOOLS_QUERY = "SET NOCOUNT ON; SELECT OUT_REFOUT, OUT_LIBOUT, COALESCE(OUT_TYPEOUT,'') FROM dbo.LISTE_OUTILS WHERE OUT_REFOUT IS NOT NULL AND OUT_REFOUT <> '' AND OUT_LIBOUT IS NOT NULL ORDER BY OUT_REFOUT;"
+# CONSOMMABLES is the vendor-documented, actively used materials master (see
+# Dokumentation Datenbank Struktur.doc / CYCLADES_SCHEMA.md). TYPC_TYPE is
+# site-configurable (SUIVPRO.dbo.TYPES_CONSOMMABLES); at this plant TYPC_TYPE=1
+# ("Matière") mixes real granulate/masterbatch with piece-counted inserts, so
+# CONS_UNITE IN ('KG','G') is what actually isolates real raw materials —
+# confirmed against sample data (61 rows, e.g. "PP 15 % TALC FINALLOY NATUREL",
+# matching the reference U10/3045 sheet's material family). GP_CONSOF/GP_OF in
+# GPAO_PVL_SAP looked structurally right but are effectively unused (2 rows total).
+MATERIALS_QUERY = ("SET NOCOUNT ON; SELECT DISTINCT CONS_REFCONS, CONS_LIBCONS, '' FROM dbo.CONSOMMABLES "
+                   "WHERE TYPC_TYPE = 1 AND CONS_UNITE IN ('KG','G') AND CONS_LIBCONS IS NOT NULL "
+                   "AND CONS_LIBCONS <> '' ORDER BY CONS_LIBCONS;")
 
 
-def sql_export(target, query):
+def sql_export(target, query, database="SUIVPRO"):
     command = (
         "docker run --rm --env-file \"$HOME/cyclades-db.env\" " + SQLCMD_IMAGE + " /bin/sh -c " +
         shlex.quote(
             "/opt/mssql-tools/bin/sqlcmd -S \"$CYCLADES_DB_HOST,$CYCLADES_DB_PORT\" "
-            "-U \"$CYCLADES_DB_USER\" -P \"$CYCLADES_DB_PASSWORD\" -d SUIVPRO -C -W -h -1 -s '|' -Q " + shlex.quote(query)
+            f"-U \"$CYCLADES_DB_USER\" -P \"$CYCLADES_DB_PASSWORD\" -d {database} -C -W -h -1 -s '|' -Q " + shlex.quote(query)
         )
     )
     # On spc-vm Cyclades is directly reachable. Development machines use the
