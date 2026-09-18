@@ -1,3 +1,6 @@
+# Přihlášení: aplikace nemá vlastní login, uživatele bere z hlaviček X-Authentik-* od Caddy
+# (forward auth, repo pi_caddy). Za proxy zruší `ports:` compose.override.yml z pi_caddy
+# (enable-app.sh processlog) – bez proxy jde hlavičky podvrhnout.
 services:
   processlog:
     build: .
@@ -5,7 +8,8 @@ services:
     ports:
       - "${PROCESSLOG_PORT:-8000}:8000"
     environment:
-      SECRET_KEY: ${SECRET_KEY:-change-this-before-production}
+      # povinné, patří do .env vedle compose.yml (bez něj kontejner nenastartuje)
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY chybí – vytvoř .env vedle compose.yml}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
     volumes:
       - processlog_data:/data

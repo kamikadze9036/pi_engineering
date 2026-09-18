@@ -1,0 +1,8 @@
+{% extends 'base.html' %}{% block title %}Přístup odepřen · ProcessLog{% endblock %}{% block content %}
+<section class="login-card"><div class="brand large">PROCESS<span>LOG</span></div><h1>Procesní deník</h1>
+{% if reason == 'no_group' %}<p>Jste přihlášen(a), ale nemáte v ProcessLogu roli. Požádejte správce o skupinu <code>processlog-technolog</code> nebo <code>processlog-admin</code> v Authentiku.</p>
+{% elif reason == 'inactive' %}<p>Váš účet v ProcessLogu je deaktivovaný. Obraťte se na správce.</p>
+{% else %}<p>Nepodařilo se ověřit přihlášení (chybí údaje ze SSO). Otevřete aplikaci na její běžné adrese, nebo se přihlaste znovu.</p>
+<p><a class="primary wide" href="/outpost.goauthentik.io/start?rd={{ request.url | urlencode }}">Přihlásit se</a></p>{% endif %}
+<p class="hint">Přihlašování zajišťuje firemní SSO (Authentik). Aplikace nemá vlastní hesla.</p></section>
+{% endblock %}

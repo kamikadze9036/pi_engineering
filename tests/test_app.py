@@ -3,6 +3,8 @@ import sqlite3
 import tempfile
 import unittest
 
+os.environ.setdefault("SECRET_KEY", "test")  # app.py vytváří aplikaci už při importu
+
 from app import create_app
 
 
@@ -15,8 +17,24 @@ class ProcessLogTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def login(self, username="admin", password="admin123"):
-        return self.client.post("/login", data={"username": username, "password": password}, follow_redirects=True)
+    # SSO: místo loginu se nastaví hlavičky, které za Caddy posílá Authentik
+    ADMIN = ("admin", "spc-users|processlog-admin", "Petr Novák")
+    TECHNIK = ("technik", "spc-users|processlog-technolog", "Jan Svoboda")
+
+    def login(self, username="admin", password=None):
+        who = {"admin": self.ADMIN, "technik": self.TECHNIK}[username]
+        return self.as_user(*who)
+
+    def as_user(self, username, groups, name=""):
+        self.client.environ_base = {
+            "HTTP_X_AUTHENTIK_USERNAME": username,
+            "HTTP_X_AUTHENTIK_GROUPS": groups,
+            "HTTP_X_AUTHENTIK_NAME": name,
+        }
+        return self.client.get("/")
+
+    def logout(self):
+        self.client.environ_base = {}
 
     def test_login_and_catalog_filtering(self):
         response = self.login()
@@ -55,18 +73,15 @@ class ProcessLogTest(unittest.TestCase):
         with sqlite3.connect(os.path.join(self.tmp.name, "test.db")) as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM change_audit WHERE change_id=1").fetchone()[0], 2)
 
-    def test_user_can_change_password(self):
+    def test_admin_can_deactivate_user_and_tool(self):
+        self.login("technik")  # technik se založí při prvním přihlášení
         self.login()
-        response = self.client.post("/account/password", data={"current_password": "admin123", "new_password": "noveheslo1", "confirmation": "noveheslo1"}, follow_redirects=True)
-        self.assertIn("Heslo bylo změněno".encode(), response.data)
-
-    def test_admin_can_reset_user_and_deactivate_tool(self):
-        self.login()
-        response = self.client.post("/admin/users/2", data={"display_name": "Jan Svoboda", "role": "technolog", "active": "on", "password": "reset123"}, follow_redirects=True)
-        self.assertIn("Heslo bylo resetováno".encode(), response.data)
-        self.client.post("/logout")
-        self.assertIn("Nová procesní změna".encode(), self.login("technik", "reset123").data)
-        self.client.post("/logout")
+        response = self.client.post("/admin/users/1", data={"active": "on"}, follow_redirects=True)
+        self.assertIn("aktivován".encode(), response.data)
+        self.client.post("/admin/users/1", data={}, follow_redirects=True)
+        response = self.as_user(*self.TECHNIK)  # technik (id 1) deaktivován, i s platnou hlavičkou
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("deaktivovaný".encode(), response.data)
         self.login()
         self.client.post("/admin/tools/1/active", data={"action": "deactivate"})
         self.assertEqual(self.client.get("/api/catalog/tools?q=MO2945").get_json(), [])
@@ -74,12 +89,12 @@ class ProcessLogTest(unittest.TestCase):
     def test_history_is_shared_but_only_admin_can_delete(self):
         self.login()
         self.client.post("/changes", data={"changed_at":"2026-09-11T09:00","machine_id":1,"tool_id":1,"description":"Adminův společný záznam.","result_status":"confirmed"})
-        self.client.post("/logout")
+        self.logout()
         self.login("technik", "technik123")
         self.assertIn("Adminův společný záznam".encode(), self.client.get("/history").data)
         self.assertEqual(self.client.post("/history/1/delete").status_code, 403)
         self.assertEqual(self.client.get("/changes/1/edit").status_code, 403)
-        self.client.post("/logout")
+        self.logout()
         self.login()
         response = self.client.post("/history/1/delete", follow_redirects=True)
         self.assertIn("Záznam v historii byl smazán".encode(), response.data)
@@ -87,3 +102,38 @@ class ProcessLogTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_sso_headers_create_user_and_map_roles(self):
+        self.assertEqual(self.client.get("/").status_code, 403)  # bez hlaviček (mimo proxy)
+        self.assertEqual(self.as_user("novak", "spc-users").status_code, 403)  # bez skupiny processlog-*
+        self.assertIn("processlog-technolog".encode(), self.client.get("/").data)
+        # jméno tak, jak ho WSGI opravdu předá (UTF-8 bajty dekódované jako latin-1)
+        response = self.as_user("Novak", "spc-users|processlog-technolog", "Jan Novák".encode("utf-8").decode("latin-1"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Jan Novák".encode(), response.data)
+        self.assertEqual(self.client.get("/admin").status_code, 403)
+        # role se bere ze skupin při každém requestu; spc-admin = admin
+        self.assertEqual(self.as_user("novak", "spc-users|spc-admin").status_code, 200)
+        self.assertEqual(self.client.get("/admin").status_code, 200)
+        with sqlite3.connect(self.app.config["DATABASE"]) as db:
+            rows = db.execute("SELECT username, role, display_name, password_hash FROM users").fetchall()
+        self.assertEqual(rows, [("novak", "admin", "Jan Novák", "!sso")])
+
+    def test_existing_user_keeps_id_and_history(self):
+        self.login("technik")
+        self.client.post("/changes", data={"changed_at":"2026-09-11T09:00","machine_id":1,"tool_id":1,"description":"Před migrací.","result_status":"confirmed"})
+        with sqlite3.connect(self.app.config["DATABASE"]) as db:
+            db.execute("UPDATE users SET password_hash='pbkdf2:sha256:stare', role='technolog' WHERE username='technik'")
+        self.as_user("technik", "spc-users|processlog-admin")
+        self.assertIn("Před migrací".encode(), self.client.get("/history").data)
+        with sqlite3.connect(self.app.config["DATABASE"]) as db:
+            self.assertEqual(db.execute("SELECT id, role FROM users WHERE username='technik'").fetchone(), (1, "admin"))
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM users").fetchone()[0], 1)
+
+    def test_logout_goes_to_authentik(self):
+        self.login()
+        response = self.client.post("/logout")
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.headers["Location"].endswith("/outpost.goauthentik.io/sign_out"))
+        self.assertEqual(self.client.get("/login").status_code, 404)
+        self.assertEqual(self.client.get("/account/password").status_code, 404)

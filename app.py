@@ -4,12 +4,23 @@ import sqlite3
 from datetime import datetime, timedelta
 from functools import wraps
 
-from flask import Flask, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
-from werkzeug.security import check_password_hash, generate_password_hash
+from flask import Flask, abort, flash, g, jsonify, redirect, render_template, request, url_for
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROCESS_CHANGE_STATUSES = ("confirmed", "pending", "reverted", "test_verified_reverted")
+# --- SSO (Authentik přes Caddy forward auth, repo pi_caddy) ---------------------------
+# Aplikace nemá vlastní login. Caddy pustí request dál až po přihlášení v Authentiku a předá
+# hlavičky X-Authentik-Username / -Groups (oddělovač |) / -Name. Uživatel se najde podle
+# username (historie a audit zůstávají), neznámý se založí. Role se odvozuje ze skupin při
+# každém requestu. Kontejner NESMÍ publikovat port na hostu (hlavičky by šly podvrhnout).
+SSO_USERNAME_HEADER = "X-Authentik-Username"
+SSO_GROUPS_HEADER = "X-Authentik-Groups"
+SSO_NAME_HEADER = "X-Authentik-Name"
+SSO_SIGN_OUT_URL = "/outpost.goauthentik.io/sign_out"
+SSO_NO_PASSWORD = "!sso"  # users.password_hash je NOT NULL; hodnota, kterou nikdy nic neověří
+# skupina Authentik → role; první shoda vyhrává; bez shody uživatel do aplikace nesmí
+SSO_GROUP_ROLES = (("spc-admin", "admin"), ("processlog-admin", "admin"), ("processlog-technolog", "technolog"))
 STATUS_LABELS = {
     "confirmed": "Potvrzeno",
     "pending": "Čeká na ověření",
@@ -21,7 +32,7 @@ STATUS_LABELS = {
 def create_app(test_config=None):
     app = Flask(__name__)
     app.config.from_mapping(
-        SECRET_KEY=os.environ.get("SECRET_KEY", "change-this-before-production"),
+        SECRET_KEY=os.environ.get("SECRET_KEY"),
         DATABASE=os.environ.get("DATABASE_PATH", os.path.join(BASE_DIR, "data", "processlog.db")),
         PERMANENT_SESSION_LIFETIME=timedelta(days=14),
         SESSION_COOKIE_HTTPONLY=True,
@@ -30,6 +41,11 @@ def create_app(test_config=None):
     )
     if test_config:
         app.config.update(test_config)
+    if not app.config["SECRET_KEY"]:
+        if os.environ.get("FLASK_DEBUG") == "1":
+            app.config["SECRET_KEY"] = "dev-insecure-key"
+        else:
+            raise RuntimeError("SECRET_KEY není nastaven (proměnná prostředí / .env vedle compose.yml).")
 
     def connect_db():
         os.makedirs(os.path.dirname(app.config["DATABASE"]), exist_ok=True)
@@ -149,15 +165,7 @@ def create_app(test_config=None):
                FROM process_changes c
                WHERE NOT EXISTS (SELECT 1 FROM change_audit a WHERE a.change_id = c.id)"""
         )
-        now = datetime.now().isoformat(timespec="seconds")
-        if not db.execute("SELECT 1 FROM users LIMIT 1").fetchone():
-            db.executemany(
-                "INSERT INTO users(username, display_name, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
-                [
-                    ("admin", "Petr Novák", generate_password_hash("admin123"), "admin", now),
-                    ("technik", "Jan Svoboda", generate_password_hash("technik123"), "technolog", now),
-                ],
-            )
+        # účty se nezakládají – vznikají při prvním přihlášení přes SSO (viz current_user)
         if not db.execute("SELECT 1 FROM machines LIMIT 1").fetchone():
             db.executemany(
                 "INSERT INTO machines(code, name, location, source) VALUES (?, ?, ?, 'demo')",
@@ -171,15 +179,69 @@ def create_app(test_config=None):
         db.commit()
         db.close()
 
+    def header_text(name):
+        """Hlavičky přicházejí od outpostu v UTF-8, WSGI je ale dekóduje jako latin-1 → „NovÃ¡k“."""
+        value = request.headers.get(name) or ""
+        try:
+            return value.encode("latin-1").decode("utf-8").strip()
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return value.strip()
+
+    def sso_identity():
+        """(username, groups, name) z hlaviček Authentiku; lokální vývoj: FLASK_DEBUG=1 + SSO_DEV_USER."""
+        username = header_text(SSO_USERNAME_HEADER).lower()
+        groups_raw = header_text(SSO_GROUPS_HEADER)
+        name = header_text(SSO_NAME_HEADER)
+        if not username and os.environ.get("FLASK_DEBUG") == "1" and os.environ.get("SSO_DEV_USER"):
+            username = os.environ["SSO_DEV_USER"].lower()
+            groups_raw = os.environ.get("SSO_DEV_GROUPS", "spc-users|processlog-admin")
+        groups = {x.strip() for x in groups_raw.replace(",", "|").split("|") if x.strip()}
+        return username, groups, name
+
+    def sso_role(groups):
+        for group, role in SSO_GROUP_ROLES:
+            if group in groups:
+                return role
+        return None
+
     def current_user():
-        user_id = session.get("user_id")
-        if not user_id:
+        """Uživatel z hlaviček SSO; None = bez hlaviček (mimo proxy), bez role (žádná skupina
+        processlog-*) nebo lokálně deaktivovaný. Důvod je v g.sso_denied pro stránku 403."""
+        if "sso_user" in g:
+            return g.sso_user
+        g.sso_user = None
+        username, groups, name = sso_identity()
+        if not username:
+            g.sso_denied = "missing"
             return None
-        return get_db().execute("SELECT * FROM users WHERE id = ? AND active = 1", (user_id,)).fetchone()
+        role = sso_role(groups)
+        if role is None:
+            g.sso_denied = "no_group"
+            return None
+        db = get_db()
+        user = db.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+        if user is None:
+            db.execute(
+                "INSERT INTO users(username, display_name, password_hash, role, active, created_at) VALUES (?, ?, ?, ?, 1, ?)",
+                (username, name or username, SSO_NO_PASSWORD, role, datetime.now().isoformat(timespec="seconds")),
+            )
+            db.commit()
+            user = db.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+        else:
+            new_name = name or user["display_name"]
+            if user["role"] != role or user["display_name"] != new_name:
+                db.execute("UPDATE users SET role = ?, display_name = ? WHERE id = ?", (role, new_name, user["id"]))
+                db.commit()
+                user = db.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        if not user["active"]:
+            g.sso_denied = "inactive"
+            return None
+        g.sso_user = user
+        return user
 
     @app.context_processor
     def template_context():
-        return {"current_user": current_user(), "status_labels": STATUS_LABELS}
+        return {"current_user": current_user(), "status_labels": STATUS_LABELS, "sso_sign_out_url": SSO_SIGN_OUT_URL}
 
     def attach_parameters(db, changes):
         """Připojí parametry k událostem změny pro výpis i fulltextové hledání."""
@@ -277,11 +339,15 @@ def create_app(test_config=None):
             entry["summary"] = details.get("summary", [])
         return entries
 
+    def sso_denied_response():
+        """Za Caddy sem nepřihlášený nedojde; 403 = chybí hlavičky, chybí skupina, nebo deaktivace."""
+        return render_template("sso_denied.html", reason=g.get("sso_denied", "missing")), 403
+
     def login_required(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
             if current_user() is None:
-                return redirect(url_for("login", next=request.path))
+                return sso_denied_response()
             return view(*args, **kwargs)
         return wrapped
 
@@ -290,53 +356,16 @@ def create_app(test_config=None):
         def wrapped(*args, **kwargs):
             user = current_user()
             if user is None:
-                return redirect(url_for("login"))
+                return sso_denied_response()
             if user["role"] != "admin":
                 abort(403)
             return view(*args, **kwargs)
         return wrapped
 
-    @app.route("/login", methods=["GET", "POST"])
-    def login():
-        if current_user():
-            return redirect(url_for("dashboard"))
-        if request.method == "POST":
-            username = request.form.get("username", "").strip().lower()
-            password = request.form.get("password", "")
-            user = get_db().execute("SELECT * FROM users WHERE username = ? AND active = 1", (username,)).fetchone()
-            if user and check_password_hash(user["password_hash"], password):
-                session.clear()
-                session.permanent = True
-                session["user_id"] = user["id"]
-                return redirect(request.args.get("next") or url_for("dashboard"))
-            flash("Nesprávné uživatelské jméno nebo heslo.", "error")
-        return render_template("login.html")
-
-    @app.post("/logout")
+    @app.route("/logout", methods=["GET", "POST"])
     def logout():
-        session.clear()
-        return redirect(url_for("login"))
-
-    @app.route("/account/password", methods=["GET", "POST"])
-    @login_required
-    def change_password():
-        user = current_user()
-        if request.method == "POST":
-            current_password = request.form.get("current_password", "")
-            new_password = request.form.get("new_password", "")
-            confirmation = request.form.get("confirmation", "")
-            if not check_password_hash(user["password_hash"], current_password):
-                flash("Současné heslo nesouhlasí.", "error")
-            elif len(new_password) < 8:
-                flash("Nové heslo musí mít alespoň 8 znaků.", "error")
-            elif new_password != confirmation:
-                flash("Nové heslo a potvrzení se neshodují.", "error")
-            else:
-                get_db().execute("UPDATE users SET password_hash=? WHERE id=?", (generate_password_hash(new_password), user["id"]))
-                get_db().commit()
-                flash("Heslo bylo změněno.", "success")
-                return redirect(url_for("dashboard"))
-        return render_template("change_password.html")
+        # odhlášení dělá Authentik; lokální session (jen flash zprávy) není co rušit
+        return redirect(SSO_SIGN_OUT_URL)
 
     @app.get("/")
     @login_required
@@ -522,48 +551,21 @@ def create_app(test_config=None):
         stats = {"changes": db.execute("SELECT COUNT(*) FROM process_changes").fetchone()[0], "pending": db.execute("SELECT COUNT(*) FROM process_changes WHERE result_status='pending'").fetchone()[0], "tools": db.execute("SELECT COUNT(*) FROM tools WHERE active=1").fetchone()[0]}
         return render_template("admin.html", stats=stats, users=db.execute("SELECT * FROM users ORDER BY display_name").fetchall(), machines=db.execute("SELECT * FROM machines ORDER BY code LIMIT 100").fetchall(), tools=db.execute("SELECT * FROM tools ORDER BY code LIMIT 100").fetchall())
 
-    @app.post("/admin/users")
-    @admin_required
-    def add_user():
-        username = request.form.get("username", "").strip().lower()
-        display_name = request.form.get("display_name", "").strip()
-        password = request.form.get("password", "")
-        role = request.form.get("role", "technolog")
-        if not username or not display_name or len(password) < 4 or role not in ("admin", "technolog"):
-            flash("Vyplň přihlašovací jméno, celé jméno, roli a heslo o délce alespoň 4 znaky.", "error")
-            return redirect(url_for("admin"))
-        try:
-            get_db().execute("INSERT INTO users(username,display_name,password_hash,role,created_at) VALUES(?,?,?,?,?)", (username, display_name, generate_password_hash(password), role, datetime.now().isoformat(timespec="seconds")))
-            get_db().commit()
-            flash("Uživatel byl vytvořen.", "success")
-        except sqlite3.IntegrityError:
-            flash("Toto přihlašovací jméno už existuje.", "error")
-        return redirect(url_for("admin"))
-
     @app.post("/admin/users/<int:user_id>")
     @admin_required
     def update_user(user_id):
+        """Účty, jména a role žijí v Authentiku; lokálně jde jen (de)aktivovat."""
         db = get_db()
         target = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
         if not target:
             abort(404)
-        display_name = request.form.get("display_name", "").strip()
-        role = request.form.get("role", "technolog")
         active = 1 if request.form.get("active") == "on" else 0
-        password = request.form.get("password", "")
-        if not display_name or role not in ("admin", "technolog"):
-            flash("Jméno a platná role jsou povinné.", "error")
-        elif target["id"] == current_user()["id"] and not active:
+        if target["id"] == current_user()["id"] and not active:
             flash("Nemůžeš deaktivovat vlastní účet.", "error")
-        elif password and len(password) < 4:
-            flash("Resetované heslo musí mít alespoň 4 znaky.", "error")
         else:
-            if password:
-                db.execute("UPDATE users SET display_name=?,role=?,active=?,password_hash=? WHERE id=?", (display_name, role, active, generate_password_hash(password), user_id))
-            else:
-                db.execute("UPDATE users SET display_name=?,role=?,active=? WHERE id=?", (display_name, role, active, user_id))
+            db.execute("UPDATE users SET active=? WHERE id=?", (active, user_id))
             db.commit()
-            flash("Uživatel byl upraven." + (" Heslo bylo resetováno." if password else ""), "success")
+            flash("Uživatel byl " + ("aktivován." if active else "deaktivován."), "success")
         return redirect(url_for("admin"))
 
     @app.post("/admin/tools/<int:tool_id>/active")
